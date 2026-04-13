@@ -25,17 +25,22 @@ for i in range(n_replicats):
     print(f"Lancement de la simulation {i+1}/{n_replicats}")
 
     # Lancer la simulation
-    subprocess.run([python_path, "script/process_simu.py"], check=True)
+    subprocess.run([python_path, "process_simu.py"], check=True)
     
     # Appliquer add_metrics
-    subprocess.run([python_path, "script/add_metrics.py"], check=True)
+    subprocess.run([python_path, "add_metrics.py"], check=True)
     
     # Renommer et stocker le fichier resultats.csv
     result_file = os.path.join(result_dir, f"results_{i+1}.csv")
-    os.rename("results/mathis_results_to_r.csv", result_file)
+    os.rename("results/simul.csv",result_file)
+
+    # renommer et stocker les fichiers target
+    target_file = os.path.join("data/simuls", f"target_{i+1}.csv")
+    os.rename("data/simuls/target.csv", target_file)
     
     # Supprimer le fichier volumineux de base
     os.remove("results/simu_brut.csv.gz")
+    #os.remove("data/simuls/target.csv")
 
 
 # Étape 3 : Calcul de la moyenne des réplicats 

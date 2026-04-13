@@ -53,4 +53,4 @@ group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex']
 # Calcul des moyennes
 result = recall_prec.groupby(group_cols, as_index=False).mean()
 
-result.to_csv('results/mathis_results_to_r.csv')
+result.to_csv('results/simul.csv')
