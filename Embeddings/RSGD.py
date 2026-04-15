@@ -2,20 +2,23 @@ import torch
 from poincare import PoincareManifold
 
 class RiemanianSGD(torch.optim.Optimizer):
-    def __init__(self, params, lr=1e-3, manifold=None, **kwargs):
+    def __init__(self, params, lr, manifold=None, **kwargs):
         if manifold is None:
             manifold = PoincareManifold()
         defaults = dict(lr=lr, manifold=manifold)
         super(RiemanianSGD, self).__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure=None):
+    def step(self, lr=None, counts = None, closure=None):
+        '''
+        Une étape de descente de gradient Riemannienne : à savoir calcul de proj(theta+lr*rgrad)
+        '''
         loss = None
         if closure is not None:
             loss = closure()
 
         for group in self.param_groups:
-            lr = group["lr"]
+            effective_lr = lr if lr is not None else group["lr"]
             manifold = group["manifold"]
 
             for p in group["params"]:
@@ -25,8 +28,5 @@ class RiemanianSGD(torch.optim.Optimizer):
                 if d_p.is_sparse:
                     d_p = d_p.coalesce()
                 d_p = manifold.rgrad(p.data, d_p)
-                d_p.mul_(-lr)
-                d_p.add(p.data)
-                p.data = manifold.normalize(d_p)
-                # ou p = manifold.normalize(d_p)?
+                p.data = p.data = manifold.normalize(p.data + (-effective_lr) * d_p)
         return loss

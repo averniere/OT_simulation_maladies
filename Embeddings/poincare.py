@@ -21,7 +21,7 @@ class Distance(Function):
         a = a * x - v / alpha.unsqueeze(-1).expand_as(v)
         gamma = torch.sqrt(torch.pow(gamma, 2) - 1)
         gamma = torch.clamp(gamma * beta, min=eps).unsqueeze(-1)
-        return 4 * a / torch.expand_as(x)
+        return 4 * a / gamma.expand_as(a)
 
     @staticmethod
     def forward(ctx, u, v, eps):
@@ -69,7 +69,7 @@ class PoincareManifold():
         eps = self.eps
         sqnu = u.pow(2).sum(dim=-1)
         sqnu.clamp_(min=0, max=1 - eps)
-        return torch.asin((self.inner_radius * (1 - sqnu) / th.sqrt(sqnu))
+        return torch.asin((self.inner_radius * (1 - sqnu) / torch.sqrt(sqnu))
             .clamp(min=-1 + eps, max=1 - eps))
 
 
@@ -101,5 +101,4 @@ class PoincareManifold():
             p_sqnorm = torch.sum(p ** 2, dim=-1, keepdim=True)
             d_p = d_p * ((1 - p_sqnorm) ** 2 / 4).expand_as(d_p)
         return d_p
-
 
