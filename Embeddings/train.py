@@ -22,7 +22,10 @@ def train(
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     model = model.to(device)
+
+    norm_history = []
     losses = []
+    w_init = model.weight.detach().clone()
 
     for epoch in range(epochs):
         # Burn_in
@@ -57,6 +60,15 @@ def train(
         avg_loss = epoch_loss.mean().item()
         losses.append(avg_loss)
 
+        # Diagnostic 1
+        with torch.no_grad():
+            n = model.weight.norm(dim=-1)
+            norm_history.append({
+                'mean': n.mean().item(),
+                'max':  n.max().item(),
+                'min':  n.min().item(),
+            })
+
         if (epoch + 1) % eval_each == 0 or epoch == 0:
             tag = "[burn-in]" if data.burnin else "         "
             print(
@@ -67,10 +79,13 @@ def train(
                 f'"burnin": {data.burnin}'
                 f"}}"
             )
-    if model is not None:
-        model.eval()
-        with torch.no_grad():
-            embeddings = model.weight.detach().cpu().numpy()
+
+    # Diagnostic 2
+    w_final = model.weight.detach()
+    delta = (w_final - w_init).norm(dim=-1)
+    print(f"\nDéplacement moyen des embeddings : {delta.mean():.4f}")
+    print(f"Déplacement max                  : {delta.max():.4f}")
+    print(f"Embeddings non bougés (delta<1e-4): {(delta < 1e-4).sum().item()}")
 
     final_save_path = os.path.join(checkpoint_dir, "model_final.pt")        
     torch.save({
@@ -81,4 +96,5 @@ def train(
     if verbose:
         print(f"Modèle final sauvegardé : {final_save_path}")
 
-    return losses, embeddings
+    return losses, norm_history
+

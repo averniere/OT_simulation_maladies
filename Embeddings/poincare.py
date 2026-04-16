@@ -57,7 +57,7 @@ class PoincareManifold():
     def normalize(self, u):
         d = u.size(-1)
         if self.max_norm:
-            u.view(-1, d).renorm_(2, 0, self.max_norm)
+            u.view(-1, d).renorm_(2, 0, self.max_norm) # ou 2 ?
         return u
 
 
@@ -95,8 +95,8 @@ class PoincareManifold():
                 keepdim=True
             ).expand_as(d_p._values())
             n_vals = d_p._values() * ((1 - p_sqnorm) ** 2) / 4
-            n_vals.renorm_(2, 0, 5)
-            d_p = torch.sparse.DoubleTensor(d_p._indices(), n_vals, d_p.size())
+            #n_vals.renorm_(2, 0, 5)
+            d_p = torch.sparse_coo_tensor(d_p._indices(), n_vals, d_p.size())
         else:
             p_sqnorm = torch.sum(p ** 2, dim=-1, keepdim=True)
             d_p = d_p * ((1 - p_sqnorm) ** 2 / 4).expand_as(d_p)
