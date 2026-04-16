@@ -28,14 +28,22 @@ for j, row in df_hpo.iterrows():
     for parent_id in row["parents"]:
         if parent_id in G_hpo:
             G_hpo.add_edge(parent_id, row['hp_id'])
-    
-objects = list(G_hpo.nodes())
+
+# TEST
+G_hpo_tc = nx.transitive_closure(G_hpo)
+
+G_hpo_sym = nx.DiGraph()
+for u, v in G_hpo_tc.edges():
+    G_hpo_sym.add_edge(u, v)
+    G_hpo_sym.add_edge(v, u) 
+
+objects = list(G_hpo_sym.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_sym.edges()],dtype=np.int64)
 
 DIM = 2
 EPOCHS = 300
-LR = 0.5
+LR = 0.7
 BURN_IN = 30
 NNEGS = 10
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,7 +79,7 @@ torch.save({
     }
 }, 'models/poincare_hpo.pt')
 
-
+os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}.pt"))
 
 # Diagnostic 3
 def visualize_training(model, losses, norm_history, objects, node2id, burnin):
