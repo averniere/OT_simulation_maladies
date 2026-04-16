@@ -11,10 +11,10 @@ def train(
     optimizer,  # RiemanianSGD
     epochs,
     lr,
+    device,
     burnin=10,
     eval_each=10,
     progress=False,
-    device='cpu',
     checkpoint_dir='checkpoints',  # Nouveau paramètre
     save_every=10,
     verbose=True

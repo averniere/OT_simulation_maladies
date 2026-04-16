@@ -38,27 +38,28 @@ EPOCHS = 300
 LR = 0.5
 BURN_IN = 30
 NNEGS = 10
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 manifold = PoincareManifold()
 model = Distance_PE(n=len(objects), dim=DIM, manifold=manifold, sparse=True)
 optimizer = RiemanianSGD(model.parameters(), lr=0.5, manifold=manifold)
 data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=50)
 
-losses, norms = train( model, data, optimizer,
+losses, norms = train(model, data, optimizer,
     epochs = EPOCHS,
     lr = LR,
+    device = DEVICE,
     burnin = BURN_IN,
     eval_each = 10,
-    progress = True,
-)
+    progress = True)
 
 
 torch.save({
     'model_state_dict': model.state_dict(),
-    'data' : data, 
+    'data': data, 
     'objects': objects,
     'node2id': node2id,
-    'edges' : edges,
+    'edges': edges,
     'losses': losses,
     'norm_history': norms,
     'hyperparams': {
