@@ -42,16 +42,17 @@ node2id = {n: i for i, n in enumerate(objects)}
 edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_sym.edges()],dtype=np.int64)
 
 DIM = 2
-EPOCHS = 300
-LR = 0.7
-BURN_IN = 30
+EPOCHS = 50
+LR = 0.5
+BURN_IN = 10
 NNEGS = 10
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(DEVICE)
 
 manifold = PoincareManifold()
 model = Distance_PE(n=len(objects), dim=DIM, manifold=manifold, sparse=True)
 optimizer = RiemanianSGD(model.parameters(), lr=0.5, manifold=manifold)
-data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=50)
+data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=256)
 
 losses, norms = train(model, data, optimizer,
     epochs = EPOCHS,
