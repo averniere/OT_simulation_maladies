@@ -27,32 +27,35 @@ for i, row in df_hpo.iterrows():
 for j, row in df_hpo.iterrows():
     for parent_id in row["parents"]:
         if parent_id in G_hpo:
-            G_hpo.add_edge(parent_id, row['hp_id'])
+            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre
 
-# TEST
-G_hpo_tc = nx.transitive_closure(G_hpo)
+# TEST : graphe non orienté ------------------------------------
+G_hpo_tc = nx.transitive_closure(G_hpo)  # fermeture transitive
 
-G_hpo_sym = nx.DiGraph()
-for u, v in G_hpo_tc.edges():
-    G_hpo_sym.add_edge(u, v)
-    G_hpo_sym.add_edge(v, u) 
+#G_hpo_sym = nx.DiGraph()
+#for u, v in G_hpo_tc.edges():
+    #G_hpo_sym.add_edge(u, v)
+    #G_hpo_sym.add_edge(v, u) 
+# --------------------------------------------------------------
 
-objects = list(G_hpo_sym.nodes())
+
+objects = list(G_hpo.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_sym.edges()],dtype=np.int64)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
 
 DIM = 2
-EPOCHS = 50
-LR = 0.5
-BURN_IN = 10
-NNEGS = 10
+EPOCHS = 1000
+LR = 0.3
+BURN_IN = 100
+NNEGS = 20
+BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
 manifold = PoincareManifold()
 model = Distance_PE(n=len(objects), dim=DIM, manifold=manifold, sparse=True)
 optimizer = RiemanianSGD(model.parameters(), lr=0.5, manifold=manifold)
-data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=256)
+data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
 
 losses, norms = train(model, data, optimizer,
     epochs = EPOCHS,
@@ -80,10 +83,10 @@ torch.save({
     }
 }, 'models/poincare_hpo.pt')
 
-os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}.pt"))
+os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}_{NNEGS}_{BATCH_SIZE}.pt"))
 
 # Diagnostic 3
-def visualize_training(model, losses, norm_history, objects, node2id, burnin):
+def visualize_training(model, losses, norm_history, objects, node2id, lr, burnin):
 
     W = model.weight.detach().cpu().numpy()
     norms = np.linalg.norm(W, axis=1)
@@ -120,8 +123,8 @@ def visualize_training(model, losses, norm_history, objects, node2id, burnin):
     ax.legend(); ax.grid(alpha=0.3)
 
     plt.suptitle(
-        f'Run — {len(objects)} nœuds | dim={W.shape[1]} | '
-        f'{len(losses)} epochs',
+        f'Run — {len(objects)} nœuds | dim={W.shape[1]} | lr ={lr} |'
+        f'{len(losses)} epochs| batch_size ={BATCH_SIZE}',
         fontsize=12, y=1.02
     )
     plt.tight_layout()
@@ -134,4 +137,4 @@ def visualize_training(model, losses, norm_history, objects, node2id, burnin):
     
     return fig
 
-visualize_training(model, losses, norms, objects, node2id, burnin=10)
+visualize_training(model, losses, norms, objects, node2id, lr=LR, burnin=BURN_IN)

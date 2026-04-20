@@ -12,7 +12,7 @@ def train(
     epochs,
     lr,
     device,
-    burnin=10,
+    burnin,
     eval_each=10,
     progress=False,
     checkpoint_dir='checkpoints',  # Nouveau paramètre
