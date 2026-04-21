@@ -44,9 +44,9 @@ node2id = {n: i for i, n in enumerate(objects)}
 edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
 
 DIM = 5
-EPOCHS = 800
+EPOCHS = 500
 LR = 0.3
-BURN_IN = 80
+BURN_IN = 50
 NNEGS = 20
 BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -83,7 +83,7 @@ torch.save({
     }
 }, 'models/poincare_hpo.pt')
 
-os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}_Wnn{NNEGS}_{BATCH_SIZE}.pt"))
+os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}_WN{NNEGS}_{BATCH_SIZE}.pt"))
 
 # Diagnostic 3
 def visualize_training(model, losses, norm_history, objects, node2id, lr, burnin):

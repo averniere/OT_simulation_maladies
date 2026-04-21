@@ -46,7 +46,7 @@ class Distance(Function):
 
 
 class PoincareManifold():
-    def __init__(self, eps=1e-5, K=None, max_norm=1, **kwargs):
+    def __init__(self, eps=1e-2, K=None, max_norm=1, **kwargs):
         self.eps = eps
         self.max_norm = max_norm-eps
         self.K = K

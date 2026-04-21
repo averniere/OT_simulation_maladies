@@ -30,7 +30,7 @@ def train(
     for epoch in range(epochs):
         # Burn_in
         data.burnin = epoch < burnin
-        current_lr  = lr * _lr_multiplier if data.burnin else lr
+        current_lr  = lr * _lr_multiplier if data.burnin else lr/(1 + 0.01 * (epoch - burnin))
         epoch_loss = torch.zeros(len(data))
         loader = tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
 
@@ -54,6 +54,8 @@ def train(
             loss.backward()
 
             optimizer.step(lr=current_lr)
+
+            model.manifold.normalize(model.weight.data)
 
             epoch_loss[i_batch] = loss.detach().cpu().item()
 
