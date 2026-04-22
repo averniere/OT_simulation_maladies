@@ -118,7 +118,7 @@ class PoincareManifold():
             d_p = d_p * ((1 - p_sqnorm) ** 2 / 4).expand_as(d_p)
         return d_p
 
-    def euclidean_retraction(self, p, d_p, lr):
+    def euclidean_retractation(self, p, d_p, lr):
         p.data.add_(-lr, d_p)
 
 

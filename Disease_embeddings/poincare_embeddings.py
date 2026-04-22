@@ -14,7 +14,7 @@ def klSym(preds, targets):
 
 class Poincarre_embeddings(nn.Module):
 
-    def __init__(self, n, dim, manifold, sparse, Qdist='Laplace', lossfn='klSym', gamma=1.0, cuda=0):
+    def __init__(self, n, dim, manifold, Qdist='Laplace', lossfn='klSym', gamma=1.0, cuda=0):
         super(Poincarre_embeddings, self).__init__()
         self.dim = dim
         self.n = n
@@ -43,12 +43,12 @@ class Poincarre_embeddings(nn.Module):
 
     def forward(self, inputs):
         embs_all = self.embeddings.weight.unsqueeze(0)
-        embs_all = embs_all.expand(len(inputs), self.size, self.dim)
+        embs_all = embs_all.expand(len(inputs), self.n, self.dim)
 
         embs_inputs = self.embeddings(inputs).unsqueeze(1)
         embs_inputs = embs_inputs.expand_as(embs_all)
 
-        dists = self.manifold.distance.apply(embs_inputs, embs_all).squeeze(-1)
+        dists = self.manifold.distance(embs_inputs, embs_all).squeeze(-1)
 
         if self.lossfnname == 'kl':
             if self.Qdist == 'laplace':

@@ -5,24 +5,26 @@ from tqdm import tqdm
 from torch.utils.data import TensorDataset, DataLoader
 
 
-def train(model, data, optimizer, args, fout=None, labels=None, earlystop=0.0):
-    loader = DataLoader(data, batch_size=args.batchsize, shuffle=True)
+def train(model, data, optimizer, args, device, labels=None, earlystop=0.0):
+    loader = DataLoader(data, batch_size=args["batchsize"], shuffle=True)
 
-    pbar = tqdm(range(args.epochs))
+    model = model.to(device)
+    pbar = tqdm(range(args["epochs"]))
 
     n_iter = 0
     losses = []
     earlystop_count = 0
-    for epoch in pbar:        
+    for epoch in pbar:
         grad_norm = []
 
         # determine learning rate
-        lr = args.lr
-        if epoch < args.burnin:
-            lr = lr * args.lrm
+        lr = args["lr"]
+        if epoch < args["burnin"]:
+            lr = lr * args["lrm"]
 
         epoch_loss = 0
         for inputs, targets in loader:
+    
             loss = model.lossfn(model(inputs), targets)
 
             optimizer.zero_grad()
@@ -47,4 +49,4 @@ def train(model, data, optimizer, args, fout=None, labels=None, earlystop=0.0):
 
     delta = abs(losses[epoch] - losses[epoch-1])
 
-    return model.lt.weight.cpu().detach().numpy(), epoch_loss, epoch
+    return model.embeddings.weight.cpu().detach().numpy(), losses, epoch_loss, epoch

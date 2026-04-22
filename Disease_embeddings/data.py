@@ -1,22 +1,20 @@
 from sklearn.neighbors import kneighbors_graph
 from sklearn.decomposition import PCA
+from sklearn.utils.graph_shortest_path import graph_shortest_path
 from scipy.sparse import csgraph
 
-import pandas as pd
 import numpy as np
 import torch
-import os
 
 
 def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
-	
 	n = len(df.columns)
 
 	if with_labels:
-		x = np.double(df.values[:, 0:n - 1])
-		labels = df.values[:, (n - 1)]
+		x = np.double(df.values[:, 1:n])
+		labels = df.values[:, 0]
 		labels = labels.astype(str)
-		colnames = df.columns[0:n - 1]
+		colnames = df.columns[1:n]
 	else:
 		x = np.double(df.values)
 		labels = ['unknown'] * np.size(x, 0)
@@ -39,7 +37,7 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 		nc = min(n_pca, n)
 		pca = PCA(n_components=nc)
 		x = pca.fit_transform(x)
-    labels = np.array([str(s) for s in labels])
+	labels = np.array([str(s) for s in labels])
 	return torch.DoubleTensor(x), labels
 
 
@@ -55,9 +53,8 @@ def connect_knn(KNN, distances, n_components, labels):
 		idx_cur = np.where(labels == cur_comp)[0]
 		idx_rest = np.where(labels != cur_comp)[0]
 		d = distances[idx_cur][:, idx_rest]
-		ia, ja = np.where(d == np.min(d))
-		i = ia
-		j = ja
+		min_idx = np.argmin(d)
+		i, j = np.unravel_index(min_idx, d.shape)
 
 		KNN[idx_cur[i], idx_rest[j]] = distances[idx_cur[i], idx_rest[j]]
 		KNN[idx_rest[j], idx_cur[i]] = distances[idx_rest[j], idx_cur[i]]
@@ -69,26 +66,27 @@ def connect_knn(KNN, distances, n_components, labels):
 	return KNN
 
 
-def compute_rfa(features, mode='features', k_neighbours=15, distfn='sym', 
-    connected=False, sigma=1.0, distlocal='minkowski'):
+def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected=False, sigma=1.0, distlocal='minkowski'):
 	"""
 	Computes the target RFA similarity matrix. The RFA matrix of
 	similarities relates to the commute time between pairs of nodes, and it is
 	built on top of the Laplacian of a single connected component k-nearest
 	neighbour graph of the data.
+	Inputs : 
+		- k_neighbours : nombre d'éléments par cluster.
+		- sym : False si l'on souhaite conserver un graphe sparse avec seulement les voisins qui se désignent
+		les uns les autres ou si l'on conserve le lien dès qu'un noeud est voisin d'un autre.
+		- connected : True si l'on connecte les composantes connexes isolées à l'issu du clustering.
+		- sigma : hyperparamètre qui contrôle l'écart type de la transformation gaussienne des poids.
+		- distlocal : distance utilisée pour calculer les plus proches voisin.
 	"""
-	start = timeit.default_timer()
 	if mode == 'features':
-		KNN = kneighbors_graph(features,
-							   k_neighbours,
-							   mode='distance',
-							   metric=distlocal,
-							   include_self=False).toarray()
+		KNN = kneighbors_graph(features, k_neighbours, mode='distance', metric=distlocal, include_self=False).toarray()
 
-		if 'sym' in distfn.lower():
-			KNN = np.maximum(KNN, KNN.T)
+		if sym:
+			KNN = np.maximum(KNN, KNN.T)  # Dès qu'un noeud est voisin d'un autre on l'inclue dans le graphe
 		else:
-			KNN = np.minimum(KNN, KNN.T)    
+			KNN = np.minimum(KNN, KNN.T)  # On ne garde que les noeuds qui sont voisins l'un de l'autre
 
 		n_components, labels = csgraph.connected_components(KNN)
 
@@ -97,7 +95,9 @@ def compute_rfa(features, mode='features', k_neighbours=15, distfn='sym',
 			distances = pairwise_distances(features, metric=distlocal)
 			KNN = connect_knn(KNN, distances, n_components, labels)
 	else:
-		KNN = features    
+		KNN = features
+
+	D_high = graph_shortest_path(KNN)
 
 	if distlocal == 'minkowski':
 		S = np.exp(-KNN / (sigma*features.size(1)))
@@ -108,6 +108,6 @@ def compute_rfa(features, mode='features', k_neighbours=15, distfn='sym',
 	L = csgraph.laplacian(S, normed=False)
 
 	RFA = np.linalg.inv(L + np.eye(L.shape[0]))
-	RFA[RFA==np.nan] = 0.0
+	RFA[RFA == np.nan] = 0.0
 
-	return torch.Tensor(RFA)
+	return torch.Tensor(RFA), D_high
