@@ -24,11 +24,15 @@ EARLY_STOP = 0.001
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
+print("="*10, "Chargement des données", "="*10)
 profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
+print("")
 
-features, labels = prepare_data(profils_omim, with_labels=True, normalize=False)
+print("="*10, "Préparation des données", "="*10)
+x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False)
 RFA, D_high = compute_rfa(features, mode='features', k_neighbours=K_NEIGHBOURS, sym=True, connected = True, sigma=SIGMA, distlocal='minkowski')
+print("")
 
 print("RFA min/max/std :", RFA.min().item(), RFA.max().item(), RFA.std().item())
 print("RFA diag mean :", RFA.diagonal().mean().item())  # valeurs dominantes ?
@@ -60,6 +64,7 @@ embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, dev
 torch.save({
     'model_state_dict': model.state_dict(),
     'embeddings': embeddings,
+    'x' : x,
     'data': dataset,
     'dist_kNNG' : D_high,
     'losses': loss,

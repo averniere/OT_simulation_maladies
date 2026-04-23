@@ -1,6 +1,6 @@
 from sklearn.neighbors import kneighbors_graph
 from sklearn.decomposition import PCA
-from sklearn.utils.graph_shortest_path import graph_shortest_path
+from scipy.sparse.csgraph import shortest_path
 from scipy.sparse import csgraph
 
 import numpy as np
@@ -38,7 +38,7 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 		pca = PCA(n_components=nc)
 		x = pca.fit_transform(x)
 	labels = np.array([str(s) for s in labels])
-	return torch.DoubleTensor(x), labels
+	return x, torch.DoubleTensor(x), labels
 
 
 def connect_knn(KNN, distances, n_components, labels):
@@ -97,7 +97,7 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 	else:
 		KNN = features
 
-	D_high = graph_shortest_path(KNN)
+	D_high = shortest_path(KNN)
 
 	if distlocal == 'minkowski':
 		S = np.exp(-KNN / (sigma*features.size(1)))
