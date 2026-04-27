@@ -1,3 +1,6 @@
 __pycache__/
 Embeddings/plots/
 Embeddings/checkpoints
+*.pt
+*.png
+cache/

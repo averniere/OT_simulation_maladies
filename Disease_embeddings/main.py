@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch
+import pickle
+import hashlib
 
 from torch.utils.data import TensorDataset
 
@@ -15,12 +17,12 @@ import os
 import os.path
 
 
-DIM=2
+DIM = 10
 GAMMA = 5.0
-LR = 0.5
-K_NEIGHBOURS = 10
-SIGMA = 0.001
-EARLY_STOP = 0.001
+LR = 0.3
+K_NEIGHBOURS = 15
+SIGMA = 0.005
+EARLY_STOP = 0.005
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
@@ -31,14 +33,34 @@ print("")
 
 print("="*10, "Préparation des données", "="*10)
 x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False)
-RFA, D_high = compute_rfa(features, mode='features', k_neighbours=K_NEIGHBOURS, sym=True, connected = True, sigma=SIGMA, distlocal='minkowski')
-print("")
 
-print("RFA min/max/std :", RFA.min().item(), RFA.max().item(), RFA.std().item())
-print("RFA diag mean :", RFA.diagonal().mean().item())  # valeurs dominantes ?
+def get_cache_path(k_neighbours, sigma, distlocal, sym, connected):
+    """Génère un nom de fichier unique basé sur les paramètres."""
+    params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}"
+    hash_str = hashlib.md5(params.encode()).hexdigest()[:8]
+    return f"../cache/rfa_{hash_str}.pkl"
+
+cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, 'minkowski', False, True)
+
+if os.path.exists(cache_path):
+    print("Chargement RFA depuis le cache...")
+    with open(cache_path, 'rb') as f:
+        RFA, D_high = pickle.load(f)
+else:
+    print("Calcul RFA...")
+    RFA, D_high = compute_rfa(features, mode='features', k_neighbours=K_NEIGHBOURS,
+                               sym=False, connected=True, sigma=SIGMA, distlocal='minkowski')
+    os.makedirs("../cache", exist_ok=True)
+    with open(cache_path, 'wb') as f:
+        pickle.dump((RFA, D_high), f)
+    print(f"RFA sauvegardé dans {cache_path}")
+
+# print("")
+# print("RFA min/max/std :", RFA.min().item(), RFA.max().item(), RFA.std().item())
+# print("RFA diag mean :", RFA.diagonal().mean().item())  # valeurs dominantes ?
 
 batchsize = 32
-if batchsize<0 : 
+if batchsize < 0:
     batchsize = min(512, int(len(RFA)/10))
     print('batchsize = ', batchsize)
 lr = batchsize / 16 * LR
@@ -56,7 +78,7 @@ model = Poincarre_embeddings(n=len(dataset), dim=DIM, manifold=manifold, Qdist='
 
 optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold)
 
-args={"epochs" : 300,"lr": lr, "burnin":10, "batchsize":batchsize, "lrm":0.1}
+args={"epochs": 300,"lr": lr, "burnin": 10, "batchsize": batchsize, "lrm": 0.1}
 
 embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, device=DEVICE, labels=labels, earlystop=EARLY_STOP)
 
@@ -64,9 +86,9 @@ embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, dev
 torch.save({
     'model_state_dict': model.state_dict(),
     'embeddings': embeddings,
-    'x' : x,
+    'x': x,
     'data': dataset,
-    'dist_kNNG' : D_high,
+    'dist_kNNG': D_high,
     'losses': loss,
     'hyperparams': {
         'dim': DIM,
@@ -77,7 +99,7 @@ torch.save({
     }
 }, 'models/poincare_hpo.pt')
 
-os.rename("models/poincare_hpo.pt", os.path.join("models/", f"omim_{args["epochs"]}_LR{args["lr"]}_BS{args["batchsize"]}_D{DIM}.pt"))
+os.rename("models/poincare_hpo.pt", os.path.join("models/", f"omim_S{SIGMA}_G{GAMMA}_K{K_NEIGHBOURS}_LR{args["lr"]}_D{DIM}.pt"))
 
 # Diagnostic 3
 def visualize_training(losses, W):

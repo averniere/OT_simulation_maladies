@@ -2,14 +2,15 @@ from sklearn.neighbors import kneighbors_graph
 from sklearn.decomposition import PCA
 from scipy.sparse.csgraph import shortest_path
 from scipy.sparse import csgraph
+from scipy.linalg import solve
 
 import numpy as np
 import torch
 
 
 def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
-	n = len(df.columns)
 
+	n = len(df.columns)
 	if with_labels:
 		x = np.double(df.values[:, 1:n])
 		labels = df.values[:, 0]
@@ -19,8 +20,6 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 		x = np.double(df.values)
 		labels = ['unknown'] * np.size(x, 0)
 		colnames = df.columns
-
-	n = len(colnames)
 
 	idx = np.where(np.std(x, axis=0) != 0)[0]
 	x = x[:, idx]
@@ -33,7 +32,6 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 	if n_pca:
 		if n_pca == 1:
 			n_pca = n
-
 		nc = min(n_pca, n)
 		pca = PCA(n_components=nc)
 		x = pca.fit_transform(x)
@@ -97,7 +95,7 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 	else:
 		KNN = features
 
-	D_high = shortest_path(KNN)
+	D_high = shortest_path(KNN, method="D", directed=False)
 
 	if distlocal == 'minkowski':
 		S = np.exp(-KNN / (sigma*features.size(1)))
@@ -107,7 +105,8 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 	S[KNN == 0] = 0
 	L = csgraph.laplacian(S, normed=False)
 
-	RFA = np.linalg.inv(L + np.eye(L.shape[0]))
+	n = L.shape[0]
+	RFA = solve(L + np.eye(n), np.eye(n), assume_a='pos')
 	RFA[RFA == np.nan] = 0.0
 
-	return torch.Tensor(RFA), D_high
+	return torch.from_numpy(RFA.copy()), D_high
