@@ -17,12 +17,13 @@ import os
 import os.path
 
 
-DIM = 10
-GAMMA = 5.0
+DIM = 2
+GAMMA = 10
 LR = 0.3
 K_NEIGHBOURS = 15
 SIGMA = 0.005
 EARLY_STOP = 0.005
+N_PCA = 0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
@@ -32,15 +33,18 @@ profils_omim = profils_omim.reset_index()
 print("")
 
 print("="*10, "Préparation des données", "="*10)
-x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False)
+x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False, n_pca=N_PCA)
 
-def get_cache_path(k_neighbours, sigma, distlocal, sym, connected):
+def get_cache_path(k_neighbours, sigma, distlocal, sym, connected, n_pca=0):
     """Génère un nom de fichier unique basé sur les paramètres."""
-    params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}"
+    if n_pca>0:
+        params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}_{n_pca}"
+    else :
+        params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}"
     hash_str = hashlib.md5(params.encode()).hexdigest()[:8]
     return f"../cache/rfa_{hash_str}.pkl"
 
-cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, 'minkowski', False, True)
+cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, 'minkowski', False, True, n_pca=N_PCA)
 
 if os.path.exists(cache_path):
     print("Chargement RFA depuis le cache...")
@@ -78,7 +82,7 @@ model = Poincarre_embeddings(n=len(dataset), dim=DIM, manifold=manifold, Qdist='
 
 optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold)
 
-args={"epochs": 300,"lr": lr, "burnin": 10, "batchsize": batchsize, "lrm": 0.1}
+args={"epochs": 300,"lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
 
 embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, device=DEVICE, labels=labels, earlystop=EARLY_STOP)
 

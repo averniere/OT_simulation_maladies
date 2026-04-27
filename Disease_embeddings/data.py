@@ -3,6 +3,8 @@ from sklearn.decomposition import PCA
 from scipy.sparse.csgraph import shortest_path
 from scipy.sparse import csgraph
 from scipy.linalg import solve
+from scipy.sparse.csgraph import connected_components
+from scipy.sparse import csr_matrix
 
 import numpy as np
 import torch
@@ -32,7 +34,7 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 	if n_pca:
 		if n_pca == 1:
 			n_pca = n
-		nc = min(n_pca, n)
+		nc = min(n_pca, x.shape[0], x.shape[1])
 		pca = PCA(n_components=nc)
 		x = pca.fit_transform(x)
 	labels = np.array([str(s) for s in labels])
@@ -44,23 +46,40 @@ def connect_knn(KNN, distances, n_components, labels):
 	Given a KNN graph, connect nodes until we obtain a single connected
 	component.
 	"""
-	c = [list(labels).count(x) for x in np.unique(labels)]
+	print(f"Composantes au départ : {n_components}")
+	parent = list(range(len(labels)))
 
-	cur_comp = 0
+	def find(x):
+		while parent[x] != x:
+			parent[x] = parent[parent[x]]  # path compression
+			x = parent[x]
+		return x
+	
+	def union(x, y):
+		px, py = find(x), find(y)
+		if px != py:
+			parent[px] = py
+			return True
+		return False
+
+	for i, label in enumerate(labels):
+		union(i, np.where(labels == label)[0][0])
+
 	while n_components > 1:
-		idx_cur = np.where(labels == cur_comp)[0]
-		idx_rest = np.where(labels != cur_comp)[0]
+		cur_comp = find(np.where(labels == labels[0])[0][0])
+		idx_cur = np.array([i for i in range(len(labels)) if find(i) == cur_comp])
+		idx_rest = np.array([i for i in range(len(labels)) if find(i) != cur_comp])
 		d = distances[idx_cur][:, idx_rest]
 		min_idx = np.argmin(d)
 		i, j = np.unravel_index(min_idx, d.shape)
 
 		KNN[idx_cur[i], idx_rest[j]] = distances[idx_cur[i], idx_rest[j]]
 		KNN[idx_rest[j], idx_cur[i]] = distances[idx_rest[j], idx_cur[i]]
-
-		nearest_comp = labels[idx_rest[j]]
-		labels[labels == nearest_comp] = cur_comp
+		
+		union(idx_cur[i], idx_rest[j])
 		n_components -= 1
 
+	print(f"Composantes après connect_knn : {n_components}")
 	return KNN
 
 
