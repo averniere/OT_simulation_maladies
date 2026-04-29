@@ -17,10 +17,10 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 
 	n = len(df.columns)
 	if with_labels:
-		x = np.double(df.values[:, 1:n])
+		x = np.double(df.values[:, 1:])
 		labels = df.values[:, 0]
 		labels = labels.astype(str)
-		colnames = df.columns[1:n]
+		colnames = df.columns[1:]
 	else:
 		x = np.double(df.values)
 		labels = ['unknown'] * np.size(x, 0)
@@ -95,7 +95,6 @@ def connect_knn(KNN, distances, n_components, labels):
 			d = distances[i, j]
 			edges.append((d, i, j))
 	edges.sort(key=lambda x: x[0])
-	print(f"{len(edges)} arêtes générées et triées.")
 	iterations = 0
 	total_edges_checked = len(edges)
 	with tqdm(total=total_edges_checked, desc="Kruskal (Tri & Fusion)", unit="arête") as pbar:
@@ -103,7 +102,7 @@ def connect_knn(KNN, distances, n_components, labels):
 		for d, i, j in edges:
 			iterations += 1
 			if uf.union(i, j):
-				value = max(d, 1e-10)
+				value = max(d, 1e-4)
 				KNN[i, j] = value
 				KNN[j, i] = value
 				# Debug
@@ -121,9 +120,6 @@ def connect_knn(KNN, distances, n_components, labels):
 	n_comp_check, _ = csgraph.connected_components(KNN, directed=True)
 	print(f"Vérification connectivité réelle de KNN : {n_comp_check} composantes")
 	final_labels = np.array([uf.find(i) for i in range(n_nodes)])
-	for node in isolated_nodes:
-		voisins = np.where(KNN[node] > 0)[0]
-		print(f"Après Kruskal — Nœud {node} : voisins={voisins}")
 	return KNN, final_labels, uf.n_components
 
 
@@ -174,7 +170,13 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 		- distlocal : distance utilisée pour calculer les plus proches voisin.
 	"""
 	if mode == 'features':
-		KNN = kneighbors_graph(features, k_neighbours, mode='distance', metric=distlocal, include_self=False, n_jobs=-1).toarray()
+		KNN_sparse = kneighbors_graph(features, k_neighbours, mode='distance', metric=distlocal, include_self=False, n_jobs=-1)
+		KNN_sparse.data[KNN_sparse.data == 0.0] = 1e-4
+		row = KNN_sparse.getrow(429)
+		print(f"Voisins de 429 : {row.indices}")
+		print(f"Distances : {row.data}")
+
+		KNN = KNN_sparse.toarray()
 
 		if sym:
 			KNN = np.maximum(KNN, KNN.T)  # Dès qu'un noeud est voisin d'un autre on l'inclue dans le graphe
@@ -183,35 +185,41 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 
 		n_components, labels = csgraph.connected_components(KNN, directed=False)
 		print("n_components KNN", n_components)
+		
+		old_duplicates = [431, 558, 1028, 1098, 1101, 1102]  # etc.
+		for node in old_duplicates:
+			print(f"Nœud {node} → composante {labels[node]}, même que 429 ({labels[429]}) : {labels[node] == labels[429]}")
 
 		if connected and (n_components > 1):
 			distances = pairwise_distances(features, metric=distlocal, n_jobs=-1)
 			print(f"NaN dans distances : {np.isnan(distances).sum()}")
 			print(f"Inf dans distances : {np.isinf(distances).sum()}")
+
 			isolated = np.where(KNN.sum(axis=1) == 0)[0]
 			print(f"Nœuds sans aucun voisin dans KNN : {len(isolated)}")
 			print(f"Distances min/max de ces nœuds : {distances[isolated].min()}, {distances[isolated].max()}")
+			
 			KNN, labels_new, n_components_new = connect_knn(KNN, distances, n_components, labels)
 			print(f"Non nuls juste après connect_knn : {np.count_nonzero(KNN)}")
 			print(f"Isolés juste après connect_knn : {len(np.where(KNN.sum(axis=1) == 0)[0])}")
 	else:
 		KNN = features
 
-	# Diagnostic
+	# Diagnostic I
 	n_comp_final, comp_labels = connected_components(KNN, directed=True)
-	#n_comp_final_sparse, _ = connected_components(csr_matrix(KNN_new), directed=False)
+
 	print(f"Composantes connexes avant shortest_path : {n_comp_final}")
-	#print(f"Composantes connexes sparse avant shortest_path : {n_comp_final_sparse}")
-	print(f"Noeuds isolés : {len(np.where(KNN.sum(axis=1) == 0)[0])}")
 	print(f"Valeurs non nulles dans KNN : {np.count_nonzero(KNN)}")
-	print(f"KNN symétrique : {np.allclose(KNN, KNN.T)}")
+
+	# Diagnostic II
 	comp_sizes = np.bincount(comp_labels)
 	sorted_comp = np.argsort(comp_sizes)  # du plus petit au plus grand
 	print(f"{n_comp_final} composantes :")
 	for rank, comp_id in enumerate(sorted_comp):
 		nodes = np.where(comp_labels == comp_id)[0]
 		print(f"  Composante {rank+1} (id={comp_id}) : {len(nodes)} nœuds → {nodes[:10]}{'...' if len(nodes) > 10 else ''}")
-	D_high = shortest_path(KNN, method="D", directed=True)
+
+	D_high = shortest_path(KNN, method="D", directed=False)
 	print("Nb inf dans D_high :", np.isinf(D_high).sum())
 
 	if distlocal == 'minkowski':

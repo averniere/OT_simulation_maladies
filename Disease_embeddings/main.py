@@ -17,11 +17,11 @@ import os
 import os.path
 
 
-DIM = 2
-GAMMA = 10
-LR = 0.3
+DIM = 10
+GAMMA = 3.
+LR = 0.07
 K_NEIGHBOURS = 15
-SIGMA = 0.005
+SIGMA = 1.0
 EARLY_STOP = 0.005
 N_PCA = 0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -63,7 +63,7 @@ else:
 # print("RFA min/max/std :", RFA.min().item(), RFA.max().item(), RFA.std().item())
 # print("RFA diag mean :", RFA.diagonal().mean().item())  # valeurs dominantes ?
 
-batchsize = 32
+batchsize = 16
 if batchsize < 0:
     batchsize = min(512, int(len(RFA)/10))
     print('batchsize = ', batchsize)
@@ -82,7 +82,7 @@ model = Poincarre_embeddings(n=len(dataset), dim=DIM, manifold=manifold, Qdist='
 
 optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold)
 
-args={"epochs": 300,"lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
+args={"epochs": 500,"lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
 
 embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, device=DEVICE, labels=labels, earlystop=EARLY_STOP)
 
@@ -138,7 +138,7 @@ def visualize_training(losses, W):
     )
     plt.tight_layout()
     
-    fname = f"plots/omim_{args["epochs"]}_LR{args["lr"]}_BS{args["batchsize"]}_D{DIM}.pt.png"
+    fname = f"plots/omim_{args["epochs"]}_LR{args["lr"]}_G{GAMMA}_D{DIM}.pt.png"
     plt.savefig(fname, dpi=150, bbox_inches='tight')
     print(f"Figure sauvegardée : {fname}")
     plt.show()
