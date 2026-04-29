@@ -4,10 +4,9 @@ from utils.math_utils import tanh, artanh
 
 class PoincareManifold():
     def __init__(self, eps=1e-2, max_norm=1, **kwargs):
-        self.eps = eps  
+        self.eps = eps
         self.min_norm = 1e-15
         self.max_norm = max_norm-eps
-
 
     def init_weights(self, w, c, irange=1e-5):
         w.data.uniform_(-irange, irange)
@@ -36,7 +35,6 @@ class PoincareManifold():
     def lambda_x(self, x, c):
         x_sqnorm = torch.sum(x.data.pow(2), dim=-1, keepdim=True)
         return 2 / (1. - c * x_sqnorm).clamp_min(self.min_norm)
-    
 
     def proj_x(self, x, c):
         norm = torch.clamp_min(x.norm(dim=-1, keepdim=True, p=2), self.min_norm)
@@ -45,24 +43,20 @@ class PoincareManifold():
         projected = x / norm * maxnorm
         return torch.where(cond, projected, x)
 
-    
     def proj_tan0(self, u, c):
         return u
 
-    
     def expmap0(self, u, c):
         sqrt_c = c ** 0.5
         u_norm = torch.clamp_min(u.norm(dim=-1, p=2, keepdim=True), self.min_norm)
         gamma_1 = tanh(sqrt_c * u_norm) * u / (sqrt_c * u_norm)
         return gamma_1
 
-
     def logmap0(self, p, c):
         sqrt_c = c ** 0.5
         p_norm = p.norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
         scale = 1. / sqrt_c * artanh(sqrt_c * p_norm) / p_norm
         return scale * p
-
 
     def mobius_add(self, x, y, c, dim=-1):
         """Translation dans l'esapce hyperbolique"""
@@ -74,7 +68,6 @@ class PoincareManifold():
         denom = 1 + 2 * c * xy + c ** 2 * x2 * y2
         return num / denom.clamp_min(self.min_norm)
 
-
     def mobius_matvec(self, m, x, c):
         sqrt_c = c ** 0.5
         x_norm = x.norm(dim=-1, keepdim=True, p=2).clamp_min(self.min_norm)
@@ -85,7 +78,6 @@ class PoincareManifold():
         res_0 = torch.zeros(1, dtype=res_c.dtype, device=res_c.device)
         res = torch.where(cond, res_0, res_c)
         return res
-
 
     def rgrad(self, p, d_p):
         '''
@@ -99,7 +91,6 @@ class PoincareManifold():
                 keepdim=True
             ).expand_as(d_p._values())
             n_vals = d_p._values() * ((1 - p_sqnorm) ** 2) / 4
-            #n_vals.renorm_(2, 0, 5)
             d_p = torch.sparse_coo_tensor(d_p._indices(), n_vals, d_p.size())
         else:
             p_sqnorm = torch.sum(p ** 2, dim=-1, keepdim=True)
