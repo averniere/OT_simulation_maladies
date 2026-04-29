@@ -35,14 +35,16 @@ print("")
 print("="*10, "Préparation des données", "="*10)
 x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False, n_pca=N_PCA)
 
+
 def get_cache_path(k_neighbours, sigma, distlocal, sym, connected, n_pca=0):
     """Génère un nom de fichier unique basé sur les paramètres."""
-    if n_pca>0:
+    if n_pca > 0:
         params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}_{n_pca}"
-    else :
+    else:
         params = f"{k_neighbours}_{sigma}_{distlocal}_{sym}_{connected}"
     hash_str = hashlib.md5(params.encode()).hexdigest()[:8]
     return f"../cache/rfa_{hash_str}.pkl"
+
 
 cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, 'minkowski', False, True, n_pca=N_PCA)
 
@@ -82,7 +84,7 @@ model = Poincarre_embeddings(n=len(dataset), dim=DIM, manifold=manifold, Qdist='
 
 optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold)
 
-args={"epochs": 500,"lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
+args = {"epochs": 500, "lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
 
 embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, device=DEVICE, labels=labels, earlystop=EARLY_STOP)
 
@@ -98,12 +100,13 @@ torch.save({
         'dim': DIM,
         'epochs': args["epochs"],
         'lr': args["lr"],
-        'burnin' : args["burnin"],
-        'batchsize' : args["batchsize"]
+        'burnin': args["burnin"],
+        'batchsize': args["batchsize"]
     }
 }, 'models/poincare_hpo.pt')
 
 os.rename("models/poincare_hpo.pt", os.path.join("models/", f"omim_S{SIGMA}_G{GAMMA}_K{K_NEIGHBOURS}_LR{args["lr"]}_D{DIM}.pt"))
+
 
 # Diagnostic 3
 def visualize_training(losses, W):
@@ -114,11 +117,11 @@ def visualize_training(losses, W):
     
     # ── 1. Disque de Poincaré ─────────────────────────────────────────
     ax = axes[0]
-    ax.add_patch(plt.Circle((0,0), 1.0, color='gray', fill=False, lw=1.5, ls='--'))
-    sc = ax.scatter(W[:,0], W[:,1], c=norms, cmap='plasma',
+    ax.add_patch(plt.Circle((0, 0), 1.0, color='gray', fill=False, lw=1.5, ls='--'))
+    sc = ax.scatter(W[:, 0], W[:, 1], c=norms, cmap='plasma',
                     s=10, alpha=0.7, vmin=0, vmax=1)
     plt.colorbar(sc, ax=ax, label='‖θ‖')
-    ax.scatter(W[0,0], W[0,1], c='red', s=10, alpha=0.7, edgecolors='black', linewidth=0.5)
+    ax.scatter(W[0, 0], W[0, 1], c='red', s=10, alpha=0.7, edgecolors='black', linewidth=0.5)
     ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.1, 1.1)
     ax.set_aspect('equal')
     ax.set_title(f'Embeddings finaux\nnorme max={norms.max():.3f}  moy={norms.mean():.3f}')
