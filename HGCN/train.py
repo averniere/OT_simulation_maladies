@@ -5,18 +5,17 @@ import torch
 from RiemAdam import RiemannianAdam
 from RSGD import RiemanianSGD
 from model import LPModel
+from data import load_data
 
 
-def train(args):
+def train(args, G_hpo, features, save_dir):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device : ", args.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device : ", device)
     args.patience = args.epochs if not args.patience else int(args.patience)
-    if args.save:
-        save_dir = args.save_dir
 
-    data = load_data(args, os.path.join(os.environ['DATAPATH'], args.dataset))
+    data = load_data(args, G_hpo, features)
     args.n_nodes, args.feat_dim = data['features'].shape
     args.nb_false_edges = len(data['train_edges_false'])
     args.nb_edges = len(data['train_edges'])
@@ -24,7 +23,7 @@ def train(args):
     if not args.lr_reduce_freq:
         args.lr_reduce_freq = args.epochs
 
-    model = LPModel(args)
+    model = LPModel(args, device)
 
     if args.optimizer == 'Adam':
         optimizer = RiemannianAdam(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -36,10 +35,10 @@ def train(args):
         step_size=int(args.lr_reduce_freq),
         gamma=float(args.gamma))
     tot_params = sum([np.prod(p.size()) for p in model.parameters()])
-    model = model.to(args.device)
+    model = model.to(device)
     for x, val in data.items():
         if torch.is_tensor(data[x]):
-            data[x] = data[x].to(args.device)
+            data[x] = data[x].to(device)
 
     counter = 0
     best_val_metrics = model.init_metric_dict()

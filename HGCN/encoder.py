@@ -27,11 +27,11 @@ class HGCN(Encoder):
     Hyperbolic-GCN.
     """
 
-    def __init__(self, c, args):
+    def __init__(self, c, args, device):
         super(HGCN, self).__init__(c)
-        self.manifold = PoincareManifold
+        self.manifold = PoincareManifold()
         assert args.num_layers > 1
-        dims, acts, self.curvatures = hyp_layer.get_dim_act_curv(args)
+        dims, acts, self.curvatures = hyp_layer.get_dim_act_curv(args, device)
         self.curvatures.append(self.c)
         hgc_layers = []
         for i in range(len(dims) - 1):
@@ -47,7 +47,7 @@ class HGCN(Encoder):
         self.encode_graph = True
 
     def encode(self, x, adj):
-        x_tan = self.manifold.proj_tan0(x, self.curvatures[0])
+        x_tan = self.manifold.proj_tan0(u=x, c=self.curvatures[0])
         x_hyp = self.manifold.expmap0(x_tan, c=self.curvatures[0])
-        x_hyp = self.manifold.proj(x_hyp, c=self.curvatures[0])
+        x_hyp = self.manifold.proj_x(x_hyp, c=self.curvatures[0])
         return super(HGCN, self).encode(x_hyp, adj)

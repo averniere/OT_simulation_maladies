@@ -1,5 +1,26 @@
 import torch
-from utils.math_utils import tanh, artanh
+
+
+def tanh(x, clamp=15):
+    return x.clamp(-clamp, clamp).tanh()
+
+
+def artanh(x):
+    return Artanh.apply(x)
+
+
+class Artanh(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        x = x.clamp(-1 + 1e-15, 1 - 1e-15)
+        ctx.save_for_backward(x)
+        z = x.double()
+        return (torch.log_(1 + z).sub_(torch.log_(1 - z))).mul_(0.5).to(x.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        return grad_output / (1 - input ** 2)
 
 
 class PoincareManifold():
@@ -35,6 +56,11 @@ class PoincareManifold():
     def lambda_x(self, x, c):
         x_sqnorm = torch.sum(x.data.pow(2), dim=-1, keepdim=True)
         return 2 / (1. - c * x_sqnorm).clamp_min(self.min_norm)
+
+    def egrad2rgrad(self, p, dp, c):
+        lambda_p = self._lambda_x(p, c)
+        dp /= lambda_p.pow(2)
+        return dp
 
     def proj_x(self, x, c):
         norm = torch.clamp_min(x.norm(dim=-1, keepdim=True, p=2), self.min_norm)

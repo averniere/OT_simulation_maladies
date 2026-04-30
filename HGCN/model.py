@@ -14,25 +14,24 @@ class BaseModel(nn.Module):
     Base model for graph embedding tasks.
     """
 
-    def __init__(self, args):
+    def __init__(self, args, device):
         super(BaseModel, self).__init__()
-        self.manifold_name = args.manifold
+        #self.manifold_name = 'Poincare'
         if args.c is not None:
             self.c = torch.tensor([args.c])
-            if not args.cuda == -1:
-                self.c = self.c.to(args.device)
+            self.c = self.c.to(device)
         else:
             self.c = nn.Parameter(torch.Tensor([1.]))
-        self.manifold = PoincareManifold
-        if self.manifold.name == 'Hyperboloid':
-            args.feat_dim = args.feat_dim + 1
+        self.manifold = PoincareManifold()
+        #if self.manifold.name == 'Hyperboloid':
+            #args.feat_dim = args.feat_dim + 1
         self.nnodes = args.n_nodes
-        self.encoder = getattr(encoder, args.model)(self.c, args)
+        self.encoder = encoder.HGCN(self.c, args, device)
 
     def encode(self, x, adj):
-        if self.manifold.name == 'Hyperboloid':
-            o = torch.zeros_like(x)
-            x = torch.cat([o[:, 0:1], x], dim=1)
+        #if self.manifold.name == 'Hyperboloid':
+            #o = torch.zeros_like(x)
+            #x = torch.cat([o[:, 0:1], x], dim=1)
         h = self.encoder.encode(x, adj)
         return h
 
@@ -51,8 +50,8 @@ class LPModel(BaseModel):
     Base model for link prediction task.
     """
 
-    def __init__(self, args):
-        super(LPModel, self).__init__(args)
+    def __init__(self, args, device):
+        super(LPModel, self).__init__(args, device)
         self.dc = FermiDiracDecoder(r=args.r, t=args.t)
         self.nb_false_edges = args.nb_false_edges
         self.nb_edges = args.nb_edges

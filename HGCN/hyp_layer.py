@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.nn.modules.module import Module
 
 
-def get_dim_act_curv(args):
+def get_dim_act_curv(args, device):
     """
     Helper function to get dimension and activation at every layer.
     :param args:
@@ -18,20 +18,16 @@ def get_dim_act_curv(args):
         act = getattr(F, args.act)
     acts = [act] * (args.num_layers - 1)
     dims = [args.feat_dim] + ([args.dim] * (args.num_layers - 1))
-    if args.task in ['lp', 'rec']:
-        dims += [args.dim]
-        acts += [act]
-        n_curvatures = args.num_layers
-    else:
-        n_curvatures = args.num_layers - 1
+    dims += [args.dim]
+    acts += [act]
+    n_curvatures = args.num_layers
     if args.c is None:
         # create list of trainable curvature parameters
         curvatures = [nn.Parameter(torch.Tensor([1.])) for _ in range(n_curvatures)]
     else:
         # fixed curvature
         curvatures = [torch.tensor([args.c]) for _ in range(n_curvatures)]
-        if not args.cuda == -1:
-            curvatures = [curv.to(args.device) for curv in curvatures]
+        curvatures = [curv.to(device) for curv in curvatures]
     return dims, acts, curvatures
 
 
@@ -79,13 +75,13 @@ class HypLinear(nn.Module):
     def forward(self, x):
         drop_weight = F.dropout(self.weight, self.dropout, training=self.training)
         mv = self.manifold.mobius_matvec(drop_weight, x, self.c)  # x * W
-        res = self.manifold.proj(mv, self.c)  # Projection
+        res = self.manifold.proj_x(mv, self.c)  # Projection
         if self.use_bias:
             bias = self.manifold.proj_tan0(self.bias.view(1, -1), self.c)
             hyp_bias = self.manifold.expmap0(bias, self.c)
-            hyp_bias = self.manifold.proj(hyp_bias, self.c)
+            hyp_bias = self.manifold.proj_x(hyp_bias, self.c)
             res = self.manifold.mobius_add(res, hyp_bias, c=self.c)
-            res = self.manifold.proj(res, self.c)
+            res = self.manifold.proj_x(res, self.c)
         return res
 
     def extra_repr(self):
@@ -128,7 +124,7 @@ class HypAgg(Module):
                 support_t = torch.matmul(adj_att, x_tangent)
         else:
             support_t = torch.spmm(adj, x_tangent)
-        output = self.manifold.proj(self.manifold.expmap0(support_t, c=self.c), c=self.c)
+        output = self.manifold.proj_x(self.manifold.expmap0(support_t, c=self.c), c=self.c)
         return output
 
     def extra_repr(self):
@@ -150,7 +146,7 @@ class HypAct(Module):
     def forward(self, x):
         xt = self.act(self.manifold.logmap0(x, c=self.c_in))
         xt = self.manifold.proj_tan0(xt, c=self.c_out)
-        return self.manifold.proj(self.manifold.expmap0(xt, c=self.c_out), c=self.c_out)
+        return self.manifold.proj_x(self.manifold.expmap0(xt, c=self.c_out), c=self.c_out)
 
     def extra_repr(self):
         return 'c_in={}, c_out={}'.format(
