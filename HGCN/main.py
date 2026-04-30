@@ -36,17 +36,17 @@ class Args:
     test_prop: float = 0.10
     split_seed: int = 42
     seed : int = 42
-    normalize_adj: bool = True
-    normalize_feats: bool = True
-    epochs : int = 500
-    min_epochs : int =100
-    patience : int = 50
-    lr : float = 0.1
+    normalize_adj: bool = False
+    normalize_feats: bool = False
+    epochs : int = 5
+    min_epochs : int =1
+    patience : int = 100
+    lr : float = 0.001
     lr_reduce_freq : int = None
-    weight_decay : float = 0.
+    weight_decay : float = 0.01
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
-    grad_clip : float = None
-    eval_freq : int = 1
+    grad_clip : float = 1.
+    eval_freq : int = 5
     save : bool = True
     # Modèle
     dropout : float = 0.
@@ -59,7 +59,7 @@ class Args:
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
     dim : int = 10  # Dimension de l'embedding
-    optimizer : str = 'RSGD'  # ou 'Adam' (ne marche pas pour le moment)
+    optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
 
 args = Args()
 

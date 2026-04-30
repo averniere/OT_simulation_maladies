@@ -70,6 +70,9 @@ class LPModel(BaseModel):
             edges_false = data[f'{split}_edges_false']
         pos_scores = self.decode(embeddings, data[f'{split}_edges'])
         neg_scores = self.decode(embeddings, edges_false)
+        pos_scores = pos_scores.clamp(1e-7, 1 - 1e-7)
+        neg_scores = neg_scores.clamp(1e-7, 1 - 1e-7)
+
         loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores))
         loss += F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
         if pos_scores.is_cuda:

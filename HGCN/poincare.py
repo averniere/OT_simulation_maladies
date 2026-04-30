@@ -24,7 +24,7 @@ class Artanh(torch.autograd.Function):
 
 
 class PoincareManifold():
-    def __init__(self, eps=1e-2, max_norm=1, **kwargs):
+    def __init__(self, eps=1e-3, max_norm=1, **kwargs):
         self.eps = eps
         self.min_norm = 1e-15
         self.max_norm = max_norm-eps
@@ -43,9 +43,9 @@ class PoincareManifold():
 
     def sqdist(self, p1, p2, c):
         sqrt_c = c ** 0.5
-        dist_c = artanh(
-            sqrt_c * self.mobius_add(-p1, p2, c, dim=-1).norm(dim=-1, p=2, keepdim=False)
-        )
+        mob = self.mobius_add(-p1, p2, c, dim=-1)
+        mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(0., 1. - 1e-5)
+        dist_c = artanh(sqrt_c * mob_norm)
         dist = dist_c * 2 / sqrt_c
         return dist ** 2
     """
@@ -58,7 +58,7 @@ class PoincareManifold():
         return 2 / (1. - c * x_sqnorm).clamp_min(self.min_norm)
 
     def egrad2rgrad(self, p, dp, c):
-        lambda_p = self._lambda_x(p, c)
+        lambda_p = self.lambda_x(p, c)
         dp /= lambda_p.pow(2)
         return dp
 
@@ -68,6 +68,24 @@ class PoincareManifold():
         cond = norm > maxnorm
         projected = x / norm * maxnorm
         return torch.where(cond, projected, x)
+    
+    def logmap(self, p1, p2, c):
+        sub = self.mobius_add(-p1, p2, c)
+        sub_norm = sub.norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
+        lam = self.lambda_x(p1, c)
+        sqrt_c = c ** 0.5
+        return 2 / sqrt_c / lam * artanh(sqrt_c * sub_norm) * sub / sub_norm
+
+    def expmap(self, u, p, c):
+        sqrt_c = c ** 0.5
+        u_norm = u.norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
+        second_term = (
+                tanh(sqrt_c / 2 * self.lambda_x(p, c) * u_norm)
+                * u
+                / (sqrt_c * u_norm)
+        )
+        gamma_1 = self.mobius_add(p, second_term, c)
+        return gamma_1
 
     def proj_tan0(self, u, c):
         return u
@@ -105,6 +123,29 @@ class PoincareManifold():
         res = torch.where(cond, res_0, res_c)
         return res
 
+    def inner(self, x, c, u, v=None, keepdim=False):
+        if v is None:
+            v = u
+        lambda_x = self.lambda_x(x, c)
+        return lambda_x ** 2 * (u * v).sum(dim=-1, keepdim=keepdim)
+
+    def ptransp(self, x, y, u, c):
+        lambda_x = self.lambda_x(x, c)
+        lambda_y = self.lambda_x(y, c)
+        return self._gyration(y, -x, u, c) * lambda_x / lambda_y
+
+    def _gyration(self, u, v, w, c, dim: int = -1):
+        u2 = u.pow(2).sum(dim=dim, keepdim=True)
+        v2 = v.pow(2).sum(dim=dim, keepdim=True)
+        uv = (u * v).sum(dim=dim, keepdim=True)
+        uw = (u * w).sum(dim=dim, keepdim=True)
+        vw = (v * w).sum(dim=dim, keepdim=True)
+        c2 = c ** 2
+        a = -c2 * uw * v2 + c * vw + 2 * c2 * uv * vw
+        b = -c2 * vw * u2 - c * uw
+        d = 1 + 2 * c * uv + c2 * u2 * v2
+        return w + 2 * (a * u + b * v) / d.clamp_min(self.min_norm)
+
     def rgrad(self, p, d_p):
         '''
         Calcule le gradient riemannien : d_p*(1-||p||^2)/4
@@ -125,3 +166,68 @@ class PoincareManifold():
 
     def euclidean_retractation(self, p, d_p, lr):
         p.data.add_(-lr, d_p)
+
+
+class Euclidean():
+    """
+    Euclidean Manifold class.
+    """
+
+    def __init__(self):
+        super(Euclidean, self).__init__()
+        self.name = 'Euclidean'
+        self.eps = 1e-3
+
+    def normalize(self, p):
+        dim = p.size(-1)
+        p.view(-1, dim).renorm_(2, 0, 1.)
+        return p
+
+    def sqdist(self, p1, p2, c):
+        return (p1 - p2).pow(2).sum(dim=-1)
+
+    def egrad2rgrad(self, p, dp, c):
+        return dp
+
+    def proj_x(self, p, c):
+        return p
+
+    def proj_tan(self, u, p, c):
+        return u
+
+    def proj_tan0(self, u, c):
+        return u
+
+    def expmap(self, u, p, c):
+        return p + u
+
+    def logmap(self, p1, p2, c):
+        return p2 - p1
+
+    def expmap0(self, u, c):
+        return u
+
+    def logmap0(self, p, c):
+        return p
+
+    def mobius_add(self, x, y, c, dim=-1):
+        return x + y
+
+    def mobius_matvec(self, m, x, c):
+        mx = x @ m.transpose(-1, -2)
+        return mx
+
+    def init_weights(self, w, c, irange=1e-5):
+        w.data.uniform_(-irange, irange)
+        return w
+
+    def inner(self, p, c, u, v=None, keepdim=False):
+        if v is None:
+            v = u
+        return (u * v).sum(dim=-1, keepdim=keepdim)
+
+    def ptransp(self, x, y, v, c):
+        return v
+
+    def ptransp0(self, x, v, c):
+        return x + v

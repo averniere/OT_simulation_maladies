@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 from torch.nn.modules.module import Module
+from RiemAdam import ManifoldParameter
+from poincare import PoincareManifold
 
 
 def get_dim_act_curv(args, device):
