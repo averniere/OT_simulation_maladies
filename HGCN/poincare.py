@@ -44,17 +44,35 @@ class PoincareManifold():
     def sqdist(self, p1, p2, c):
         sqrt_c = c ** 0.5
         mob = self.mobius_add(-p1, p2, c, dim=-1)
-        mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(0., 1. - 1e-5)
+        print("SQDIST")
+        def check_grad(name):
+            def hook(grad):
+                if torch.isnan(grad).any():
+                    print(f"NaN dans grad de {name}")
+                else:
+                    print(f"grad de {name} OK: min={grad.min().item():.6f}, max={grad.max().item():.6f}")
+            return hook
+        
+        mob.register_hook(check_grad("mob (sortie mobius_add)"))
+        mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(1e-10, 1. - 1e-5)
+        mob_norm.register_hook(check_grad("mob_norm"))
         dist_c = artanh(sqrt_c * mob_norm)
+        dist_c.register_hook(check_grad("dist_c"))
         dist = dist_c * 2 / sqrt_c
-        return dist ** 2
+        sqdist = dist ** 2
+        sqdist.register_hook(check_grad("sqdist"))
+        return sqdist
+        #mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(1e-10, 1. - 1e-5)
+        #dist_c = artanh(sqrt_c * mob_norm)
+        #dist = dist_c * 2 / sqrt_c
+        #return dist ** 2
     """
     def distance(self, u, v):
         return Distance.apply(u, v, self.eps)
     """
 
     def lambda_x(self, x, c):
-        x_sqnorm = torch.sum(x.data.pow(2), dim=-1, keepdim=True)
+        x_sqnorm = torch.sum(x.pow(2), dim=-1, keepdim=True)
         return 2 / (1. - c * x_sqnorm).clamp_min(self.min_norm)
 
     def egrad2rgrad(self, p, dp, c):
@@ -65,9 +83,8 @@ class PoincareManifold():
     def proj_x(self, x, c):
         norm = torch.clamp_min(x.norm(dim=-1, keepdim=True, p=2), self.min_norm)
         maxnorm = (1 - self.eps) / (c ** 0.5)
-        cond = norm > maxnorm
-        projected = x / norm * maxnorm
-        return torch.where(cond, projected, x)
+        scale = (maxnorm / norm).clamp(max=1.0)
+        return x * scale
     
     def logmap(self, p1, p2, c):
         sub = self.mobius_add(-p1, p2, c)
@@ -118,9 +135,11 @@ class PoincareManifold():
         mx = x @ m.transpose(-1, -2)
         mx_norm = mx.norm(dim=-1, keepdim=True, p=2).clamp_min(self.min_norm)
         res_c = tanh(mx_norm / x_norm * artanh(sqrt_c * x_norm)) * mx / (mx_norm * sqrt_c)
-        cond = (mx == 0).prod(-1, keepdim=True, dtype=torch.uint8)
-        res_0 = torch.zeros(1, dtype=res_c.dtype, device=res_c.device)
-        res = torch.where(cond, res_0, res_c)
+        #cond = (mx == 0).prod(-1, keepdim=True, dtype=torch.uint8)
+        mask = (mx_norm <= self.min_norm).float()
+        res = res_c * (1 - mask)
+        #res_0 = torch.zeros(1, dtype=res_c.dtype, device=res_c.device)
+        #res = torch.where(cond.bool(), res_0, res_c)
         return res
 
     def inner(self, x, c, u, v=None, keepdim=False):

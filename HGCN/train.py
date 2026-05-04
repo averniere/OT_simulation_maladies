@@ -23,6 +23,19 @@ def train(args, G_hpo, features, save_dir):
     args.nb_false_edges = len(data['train_edges_false'])
     args.nb_edges = len(data['train_edges'])
 
+    print("DATA")
+    train_edges = data['train_edges']
+    edges_false = data['train_edges_false'][np.random.randint(0, args.nb_false_edges, args.nb_edges)]
+
+    train_nodes = set(train_edges.flatten().tolist())
+    neg_nodes = set(edges_false.flatten().tolist())
+    all_nodes = set(range(data['features'].shape[0]))
+    missing = list(all_nodes - train_nodes)
+    print("Features nulles parmi les noeuds orphelins:", (data['features'][missing].sum(dim=1) == 0).sum().item())
+
+    nodes_only_in_neg = neg_nodes - train_nodes
+    print(f"Noeuds présents uniquement dans les edges négatifs : {len(nodes_only_in_neg)}")
+
     if not args.lr_reduce_freq:
         args.lr_reduce_freq = args.epochs
 
@@ -52,31 +65,28 @@ def train(args, G_hpo, features, save_dir):
     train_losses = []
     val_metrics_history = []
     for epoch in range(args.epochs):
+        print("EPOCH :", epoch)
         model.train()
         optimizer.zero_grad()
         embeddings = model.encode(data['features'], data['adj_train_norm'])
-        print(torch.isnan(embeddings).any())
-        print(torch.isinf(embeddings).any())
-        print(embeddings.norm(dim=-1).max().item())
+        embeddings.retain_grad()
+
         train_metrics = model.compute_metrics(embeddings, data, 'train')
         train_metrics['loss'].backward()
-        train_losses.append(train_metrics['loss'].item())
-        for name, param in model.named_parameters():
+        for param in model.parameters():
             if param.grad is not None:
-                print(f"{name}: grad norm = {param.grad.norm():.6f}")
-            #else:
-                #print(f"{name}: NO GRAD")
+                param.grad = torch.nan_to_num(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+        train_losses.append(train_metrics['loss'].item())
 
         if args.grad_clip is not None:
             max_norm = float(args.grad_clip)
             all_params = list(model.parameters())
+            torch.nn.utils.clip_grad_norm_(all_params, max_norm)
+            '''
             for param in all_params:
                 torch.nn.utils.clip_grad_norm_(param, max_norm)
-
+            '''
         optimizer.step()
-        for name, param in model.named_parameters():
-            if torch.isnan(param).any():
-                print(f"NaN dans {name} après step")
         lr_scheduler.step()
         if (epoch + 1) % args.eval_freq == 0:
             model.eval()

@@ -80,12 +80,18 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
                 if "step" not in group:
                     group["step"] = 0
                 betas = group["betas"]
+                print("Betas : ", betas)
                 weight_decay = group["weight_decay"]
+                print("Weight decay : ", weight_decay)
                 eps = group["eps"]
+                print("eps :", eps)
                 learning_rate = group["lr"]
+                print("LR : ", learning_rate)
                 amsgrad = group["amsgrad"]
+                print("Amsgrad :", amsgrad)
                 for point in group["params"]:
                     grad = point.grad
+                    print("Grad :", grad)
                     if grad is None:
                         continue
                     if isinstance(point, (ManifoldParameter)):
@@ -107,12 +113,15 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
                         state["exp_avg"] = torch.zeros_like(point)
                         # Exponential moving average of squared gradient values
                         state["exp_avg_sq"] = torch.zeros_like(point)
+
                         if amsgrad:
                             # Maintains max of all exp. moving avg. of sq. grad. values
                             state["max_exp_avg_sq"] = torch.zeros_like(point)
+                    print("State :", state)
                     # make local variables for easy access
                     exp_avg = state["exp_avg"]
                     exp_avg_sq = state["exp_avg_sq"]
+
                     # actual step
                     grad.add_(point, alpha=weight_decay)
                     grad = manifold.egrad2rgrad(point, grad, c)

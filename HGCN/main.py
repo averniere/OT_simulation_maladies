@@ -45,7 +45,7 @@ class Args:
     lr_reduce_freq : int = None
     weight_decay : float = 0.01
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
-    grad_clip : float = 1.
+    grad_clip : float = 0.5
     eval_freq : int = 5
     save : bool = True
     # Modèle
