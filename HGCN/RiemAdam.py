@@ -80,18 +80,12 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
                 if "step" not in group:
                     group["step"] = 0
                 betas = group["betas"]
-                print("Betas : ", betas)
                 weight_decay = group["weight_decay"]
-                print("Weight decay : ", weight_decay)
                 eps = group["eps"]
-                print("eps :", eps)
                 learning_rate = group["lr"]
-                print("LR : ", learning_rate)
                 amsgrad = group["amsgrad"]
-                print("Amsgrad :", amsgrad)
                 for point in group["params"]:
                     grad = point.grad
-                    print("Grad :", grad)
                     if grad is None:
                         continue
                     if isinstance(point, (ManifoldParameter)):
@@ -117,7 +111,6 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
                         if amsgrad:
                             # Maintains max of all exp. moving avg. of sq. grad. values
                             state["max_exp_avg_sq"] = torch.zeros_like(point)
-                    print("State :", state)
                     # make local variables for easy access
                     exp_avg = state["exp_avg"]
                     exp_avg_sq = state["exp_avg_sq"]
@@ -144,9 +137,6 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
 
                     # copy the state, we need it for retraction
                     # get the direction for ascend
-                    print("="*30)
-                    print(f"denom min: {denom.min().item()}, exp_avg max: {exp_avg.abs().max().item()}")
-                    print("="*30)
                     direction = exp_avg / denom
                     # transport the exponential averaging to the new point
                     new_point = manifold.proj_x(manifold.expmap(-step_size * direction, point, c), c)

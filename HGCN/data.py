@@ -2,9 +2,16 @@ import networkx as nx
 import scipy.sparse
 import numpy as np
 import torch
+import os
+
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+from similarities import compute_rfa
 
 
 def load_data(args, hpo_graph, omim_df):
+
     # adjacency matrix
     print("Load HPOs")
     nodes = list(hpo_graph.nodes())
@@ -12,16 +19,43 @@ def load_data(args, hpo_graph, omim_df):
     adj = nx.to_scipy_sparse_array(hpo_graph, nodelist=nodes, format='csr')
     
     # Features
-    print("Load features")
+    print("Propagate HPO annotations")
     hpo_cols = [col for col in omim_df.columns if col in node2idx]
-    features = np.zeros((len(nodes), len(omim_df)))
-    for col in hpo_cols:
-        idx = node2idx[col]
-        features[idx, :] = omim_df[col].values
-
-    #omim_reindexed = omim_df[sorted(hpo_cols, key=lambda x: node2idx[x])]
+    omim_df = propagate_annotations(omim_df, hpo_graph)
+    transformer = TfidfTransformer()
+    hpo_matrix = transformer.fit_transform(omim_df[hpo_cols].values)
+    # omim_df[hpo_cols] = hpo_matrix.toarray()
+    print("Load features")
     
-    features = scipy.sparse.csr_matrix(features)  # (termes x maladies)
+    omim_features = np.zeros((len(nodes), len(omim_df)))
+    for i, col in enumerate(hpo_cols):
+
+        idx = node2idx[col]
+
+        omim_features[idx] = (hpo_matrix[:, i].toarray().ravel())
+
+    #for col in hpo_cols:
+        #idx = node2idx[col]
+        #omim_features[idx, :] = omim_df[col].values
+
+    features = compute_structural_features(hpo_graph, nodes, node2idx, omim_features)
+    features = scipy.sparse.csr_matrix(features)
+
+    '''
+    # TEST
+    features_dense = features.copy()
+    zero_rows = np.where(features_dense.sum(axis=1) == 0)[0]
+    print(f"Noeuds sans features : {len(zero_rows)}")
+    adj_csr = scipy.sparse.csr_matrix(adj)
+    for node in zero_rows:
+        neighbors = adj_csr.getrow(node).indices
+        neighbor_feats = features_dense[neighbors]
+        if neighbor_feats.sum() > 0:
+            features_dense[node] = neighbor_feats.mean(axis=0)
+        else:
+            features_dense[node] = features_dense.mean(axis=0) * 1e-3
+    '''
+    #omim_reindexed = omim_df[sorted(hpo_cols, key=lambda x: node2idx[x])]
     print(adj.shape)       # doit être (n_terms, n_terms)
     print(features.shape)  # doit être (n_terms, n_diseases)
     
@@ -39,6 +73,33 @@ def load_data(args, hpo_graph, omim_df):
         args.normalize_adj, args.normalize_feats)
     return data
 
+
+def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
+    n = len(nodes)
+    
+    omim_feat = omim_features  # (n x n_diseases)
+    
+    degree = np.array([hpo_graph.degree(n) for n in nodes]).reshape(-1, 1)
+    
+    root = [n for n, d in hpo_graph.in_degree() if d == 0]
+    if root:
+        depths = nx.single_source_shortest_path_length(hpo_graph, root[0])
+        depth = np.array([depths.get(n, 0) for n in nodes]).reshape(-1, 1)
+    else:
+        depth = np.zeros((n, 1))
+    
+    n_descendants = np.array([
+        len(nx.descendants(hpo_graph, node)) for node in nodes
+    ]).reshape(-1, 1)
+    
+    struct_features = np.hstack([degree, depth, n_descendants])
+    struct_features = struct_features / (struct_features.max(axis=0) + 1e-8)
+
+    if not isinstance(omim_features, np.ndarray):
+        omim_features = np.array(omim_features)
+    
+    features = np.hstack([omim_feat, struct_features])
+    return features
 
 
 def mask_edges(adj, val_prop, test_prop, seed):
@@ -116,3 +177,139 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     values = torch.Tensor(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
     return torch.sparse.FloatTensor(indices, values, shape)
+
+
+def propagate_annotations(omim_df, hpo_graph):
+    """
+    Propage les annotations HPO vers tous les ancêtres.
+
+    Parameters
+    ----------
+    omim_df : pd.DataFrame
+        lignes = maladies
+        colonnes = HPO
+        valeurs = 0/1
+
+    hpo_graph : networkx.DiGraph
+        Graphe HPO orienté parent -> enfant
+
+    Returns
+    -------
+    propagated_df : pd.DataFrame
+    """
+    hpo_cols = [c for c in omim_df.columns if c in hpo_graph.nodes]
+
+    hpo2idx = {h:i for i,h in enumerate(hpo_cols)}
+
+    # Ancestors indices
+    ancestors_idx = {}
+
+    print("Precomputing ancestor indices...")
+
+    for h in hpo_cols:
+
+        anc = nx.ancestors(hpo_graph, h)
+
+        anc_idx = [
+            hpo2idx[a]
+            for a in anc
+            if a in hpo2idx
+        ]
+
+        ancestors_idx[hpo2idx[h]] = anc_idx
+
+    X = omim_df[hpo_cols].values.copy()
+
+    n_diseases = X.shape[0]
+
+    print("Propagating...")
+
+    for i in range(n_diseases):
+
+        active = np.where(X[i] > 0)[0]
+
+        propagated = set(active)
+
+        for h_idx in active:
+            propagated.update(
+                ancestors_idx[h_idx]
+            )
+
+        X[i, list(propagated)] = 1
+
+    omim_df[hpo_cols] = X
+
+    return omim_df
+
+def load_data2(args, hpo_graph, omim_df):
+
+    print("Propagation ancestrale")
+    omim_df = propagate_annotations(omim_df, hpo_graph)
+
+    # =========================
+    # HPO columns
+    # =========================
+    hpo_cols = [c for c in omim_df.columns if c.startswith("HP:")]
+
+    # =========================
+    # Disease features
+    # =========================
+    print("Build TF-IDF features")
+    X = omim_df[hpo_cols].values.astype(np.float32)
+
+    tfidf = TfidfTransformer(norm='l2')
+
+    features = tfidf.fit_transform(X)
+
+    print(features.shape)
+
+    # =========================
+    # Disease graph
+    # =========================
+    print("Compute RFA / KNN graph")
+
+    adj, D_high = compute_rfa(
+        features,
+        mode='features',
+        k_neighbours=15,
+        sym=True,
+        connected=True,
+        sigma=1.0,
+        distlocal='cosine'
+    )
+
+    adj = scipy.sparse.csr_matrix(adj)
+
+    print(adj.shape)
+    print(features.shape)
+    
+    # =========================
+    # Split edges
+    # =========================
+    data = {}
+
+    adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
+        adj,
+        args.val_prop,
+        args.test_prop,
+        args.split_seed)
+
+    data['adj_train'] = adj_train
+
+    data['train_edges'] = train_edges
+    data['train_edges_false'] = train_edges_false
+
+    data['val_edges'] = val_edges
+    data['val_edges_false'] = val_edges_false
+
+    data['test_edges'] = test_edges
+    data['test_edges_false'] = test_edges_false
+
+    data['adj_train_norm'], data['features'] = process(
+        adj_train,
+        features,
+        args.normalize_adj,
+        args.normalize_feats
+    )
+
+    return data

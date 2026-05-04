@@ -38,10 +38,10 @@ class Args:
     seed : int = 42
     normalize_adj: bool = False
     normalize_feats: bool = False
-    epochs : int = 5
-    min_epochs : int =1
+    epochs : int = 2000
+    min_epochs : int = 100
     patience : int = 100
-    lr : float = 0.001
+    lr : float = 0.0001
     lr_reduce_freq : int = None
     weight_decay : float = 0.01
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
@@ -50,11 +50,11 @@ class Args:
     save : bool = True
     # Modèle
     dropout : float = 0.
-    c : float = 1.  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
+    c : float = None  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
     r : float = 2.  # Paramètre du decoder
     t : float = 1.  # Paramètre du decoder
     bias : bool = True  # Utiliser un biais
-    use_att : bool = False 
+    use_att : bool = False  # Inutilisable en l'état : problème de mémoire
     local_agg : bool = True  # Local aggregation
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers

@@ -44,7 +44,7 @@ class PoincareManifold():
     def sqdist(self, p1, p2, c):
         sqrt_c = c ** 0.5
         mob = self.mobius_add(-p1, p2, c, dim=-1)
-        print("SQDIST")
+
         def check_grad(name):
             def hook(grad):
                 if torch.isnan(grad).any():
@@ -53,23 +53,15 @@ class PoincareManifold():
                     print(f"grad de {name} OK: min={grad.min().item():.6f}, max={grad.max().item():.6f}")
             return hook
         
-        mob.register_hook(check_grad("mob (sortie mobius_add)"))
+        # mob.register_hook(check_grad("mob (sortie mobius_add)"))
         mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(1e-10, 1. - 1e-5)
-        mob_norm.register_hook(check_grad("mob_norm"))
+        # mob_norm.register_hook(check_grad("mob_norm"))
         dist_c = artanh(sqrt_c * mob_norm)
-        dist_c.register_hook(check_grad("dist_c"))
+        # dist_c.register_hook(check_grad("dist_c"))
         dist = dist_c * 2 / sqrt_c
         sqdist = dist ** 2
-        sqdist.register_hook(check_grad("sqdist"))
+        # sqdist.register_hook(check_grad("sqdist"))
         return sqdist
-        #mob_norm = mob.norm(dim=-1, p=2, keepdim=False).clamp(1e-10, 1. - 1e-5)
-        #dist_c = artanh(sqrt_c * mob_norm)
-        #dist = dist_c * 2 / sqrt_c
-        #return dist ** 2
-    """
-    def distance(self, u, v):
-        return Distance.apply(u, v, self.eps)
-    """
 
     def lambda_x(self, x, c):
         x_sqnorm = torch.sum(x.pow(2), dim=-1, keepdim=True)
