@@ -18,7 +18,7 @@ def train(args, G_hpo, features, save_dir):
     print("Device : ", device)
     args.patience = args.epochs if not args.patience else int(args.patience)
 
-    data = load_data2(args, G_hpo, features)
+    data = load_data(args, G_hpo, features)
     #zero_rows = np.where(data["features"].sum(axis=1) == 0)[0]
     args.n_nodes, args.feat_dim = data['features'].shape
     print(f"Dimension des features : {args.feat_dim}")
@@ -32,6 +32,7 @@ def train(args, G_hpo, features, save_dir):
     train_nodes = set(train_edges.flatten().tolist())
     neg_nodes = set(edges_false.flatten().tolist())
     all_nodes = set(range(data['features'].shape[0]))
+
     missing = list(all_nodes - train_nodes)
     print("Features nulles parmi les noeuds orphelins:", 
       (data['features'][missing].sum(dim=1) == 0).sum().item())
@@ -53,6 +54,7 @@ def train(args, G_hpo, features, save_dir):
         optimizer,
         step_size=int(args.lr_reduce_freq),
         gamma=float(args.gamma))
+
     tot_params = sum([np.prod(p.size()) for p in model.parameters()])
     model = model.to(device)
     for x, val in data.items():
@@ -65,7 +67,9 @@ def train(args, G_hpo, features, save_dir):
     best_emb = None
     train_losses = []
     val_metrics_history = []
+
     for epoch in tqdm(range(args.epochs)):
+
         model.train()
         optimizer.zero_grad()
         embeddings = model.encode(data['features'], data['adj_train_norm'])
@@ -74,9 +78,12 @@ def train(args, G_hpo, features, save_dir):
         train_metrics = model.compute_metrics(embeddings, data, 'train')
         train_metrics['loss'].backward()
         # Peut potentiellement faire faire n'importe quoi 
-        for param in model.parameters():
-            if param.grad is not None:
-                param.grad = torch.nan_to_num(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
+        for name, param in model.named_parameters():
+            if param.grad is not None and torch.isnan(param.grad).any():
+                print(f"NaN dans grad de {name}")
+        # for param in model.parameters():
+            # if param.grad is not None:
+                # param.grad = torch.nan_to_num(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
         train_losses.append(train_metrics['loss'].item())
 
         if args.grad_clip is not None:
@@ -88,17 +95,22 @@ def train(args, G_hpo, features, save_dir):
                 torch.nn.utils.clip_grad_norm_(param, max_norm)
             '''
         optimizer.step()
-        for group in optimizer.param_groups:
-            for p in group['params']:
-                if p in optimizer.state:
-                    state = optimizer.state[p]
-                    if 'exp_avg' in state:
-                        state['exp_avg'] = torch.nan_to_num(state['exp_avg'], nan=0.0, posinf=0.0, neginf=0.0)
-                    if 'exp_avg_sq' in state:
-                        state['exp_avg_sq'] = torch.nan_to_num(state['exp_avg_sq'], nan=0.0, posinf=0.0, neginf=0.0)
-        with torch.no_grad():
-            for param in model.parameters():
-                param.data = torch.nan_to_num(param.data, nan=0.0, posinf=0.0, neginf=0.0)
+        # Possible source de problèmes
+        # for name, param in model.named_parameters():
+            # if param.grad is not None and torch.isnan(param.grad).any():
+                # print(f"NaN dans grad de {name}")
+        # for group in optimizer.param_groups:
+            # for p in group['params']:
+                # if p in optimizer.state:
+                    # state = optimizer.state[p]
+                    # if 'exp_avg' in state:
+                        # state['exp_avg'] = torch.nan_to_num(state['exp_avg'], nan=0.0, posinf=0.0, neginf=0.0)
+                    # if 'exp_avg_sq' in state:
+                        # state['exp_avg_sq'] = torch.nan_to_num(state['exp_avg_sq'], nan=0.0, posinf=0.0, neginf=0.0)
+        # with torch.no_grad():
+            # for param in model.parameters():
+                # param.data = torch.nan_to_num(param.data, nan=0.0, posinf=0.0, neginf=0.0)
+
         lr_scheduler.step()
         if (epoch + 1) % args.eval_freq == 0:
             model.eval()

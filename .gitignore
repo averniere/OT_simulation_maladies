@@ -3,4 +3,5 @@ Embeddings/plots/
 Embeddings/checkpoints
 *.pt
 *.png
+*.pkl
 cache/

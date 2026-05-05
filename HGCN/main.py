@@ -41,7 +41,7 @@ class Args:
     epochs : int = 2000
     min_epochs : int = 100
     patience : int = 100
-    lr : float = 0.0001
+    lr : float = 1e-4
     lr_reduce_freq : int = None
     weight_decay : float = 0.01
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
@@ -49,16 +49,16 @@ class Args:
     eval_freq : int = 5
     save : bool = True
     # Modèle
-    dropout : float = 0.
-    c : float = None  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
+    dropout : float = 0.01
+    c : float = 1.  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
     r : float = 2.  # Paramètre du decoder
-    t : float = 1.  # Paramètre du decoder
+    t : float = 4.  # Paramètre du decoder
     bias : bool = True  # Utiliser un biais
     use_att : bool = False  # Inutilisable en l'état : problème de mémoire
     local_agg : bool = True  # Local aggregation
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
-    dim : int = 10  # Dimension de l'embedding
+    dim : int = 5  # Dimension de l'embedding
     optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
 
 args = Args()

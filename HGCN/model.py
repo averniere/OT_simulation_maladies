@@ -94,6 +94,7 @@ class LPModel(BaseModel):
 
         loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores))
         loss += F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
+        # loss = F.softplus(neg_scores - pos_scores + 0.1).mean()
 
         if pos_scores.is_cuda:
             pos_scores = pos_scores.cpu()
