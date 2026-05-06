@@ -49,6 +49,7 @@ class BatchedDataset:
  
     def __init__(self, edges, objects, nnegs, batch_size, burnin=False, depth_temperature = 1.0):
         self.edges = edges
+        self.edges_arr = np.array(edges, dtype=np.int64)
         self.N = len(objects)
         self.nnegs = nnegs
         self.batch_size = batch_size
@@ -106,9 +107,50 @@ class BatchedDataset:
         return np.where(r < q[k], k, J[k])
 
 
-    def _sample_neg(self, u, target_depth, nnegs):
+    def _sample_neg(self, u, target_depth, nnegs, model=None, hard_ratio=0.5):
 
         J, q = self.alias_tables[target_depth]
+        n_hard = int(nnegs * hard_ratio) if model is not None else 0
+        n_easy = nnegs - n_hard
+        pos = self.pos_neighbors[u]
+        negs = []
+
+        # 1. Négatifs difficiles : proches dans l'espace des embeddings
+        if n_hard > 0:
+            with torch.no_grad():
+                u_emb = model.weight[u].unsqueeze(0)          # (1, dim)
+                all_emb = model.weight                         # (N, dim)
+                # Distance de Poincaré à tous les nœuds
+                u_exp = u_emb.expand(self.N, -1)
+                dists = model.manifold.distance(u_exp, all_emb, model.c).cpu().numpy()
+
+            # Masquer u et ses voisins
+            mask = np.ones(self.N, dtype=bool)
+            mask[u] = False
+            for v in pos:
+                mask[v] = False
+
+            # Trier par distance croissante → les plus proches = les plus durs
+            dists[~mask] = np.inf
+            hard_candidates = np.argsort(dists)[:n_hard * 3]  # top-k avec marge
+            # Sous-échantillonner parmi les hard candidates pour de la diversité
+            chosen = self.rng.choice(hard_candidates, size=min(n_hard, len(hard_candidates)), replace=False)
+            negs.append(chosen[:n_hard])
+
+        # 2. Négatifs faciles : tirage par alias table (profondeur)
+        if n_easy > 0:
+            candidates = self._alias_draw(J, q, size=n_easy * 3)
+            invalid = np.array([c == u or c in pos for c in candidates])
+            valid = candidates[~invalid][:n_easy]
+            n_missing = n_easy - len(valid)
+            if n_missing > 0:
+                fallback = self.rng.integers(0, self.N, size=n_missing)
+                valid = np.concatenate([valid, fallback])
+            negs.append(valid[:n_easy])
+
+        return np.concatenate(negs)
+
+        '''
         candidates = self._alias_draw(J, q, size=nnegs * 2)
         pos = self.pos_neighbors[u]
         invalid = np.array([c == u or c in pos for c in candidates])
@@ -120,8 +162,74 @@ class BatchedDataset:
             valid = np.concatenate([valid, fallback])
 
         return valid
+        '''
+
+    def __iter__(self, model=None, hard_ratio=0.5):
+        perm = np.random.permutation(len(self.edges))
+        edges_arr = np.array(self.edges)  # (E, 2) — à précalculer dans __init__
+        for start in range(0, len(self.edges), self.batch_size):
+            chunk = perm[start:start + self.batch_size]
+            B = len(chunk)
+            batch_edges = edges_arr[chunk]
+            us = batch_edges[:, 0]
+            vs = batch_edges[:, 1]
+            ix = np.empty((B, 2 + self.nnegs), dtype=np.int64)
+            ix[:, 0] = us
+            ix[:, 1] = vs
+            
+            target_depths = self.depths[vs]
+
+            if model is not None and hard_ratio > 0.0:
+                for i, (u, d) in enumerate(zip(us, target_depths)):
+                    ix[i, 2:] = self._sample_neg(int(u), d, self.nnegs, model=model, hard_ratio=hard_ratio)
+            else:
+                for d in np.unique(target_depths):
+                    mask = target_depths == d
+                    n = mask.sum()
+                    J, q = self.alias_tables[d]
+                    candidates = self._alias_draw(J, q, size=n * self.nnegs * 2).reshape(n, -1)
+                    batch_us = us[mask]
+                    negs = np.empty((n, self.nnegs), dtype=np.int64)
+                    for i, (u, cands) in enumerate(zip(batch_us, candidates)):
+                        pos = self.pos_neighbors[u]
+                        invalid = np.array([c == u or c in pos for c in cands])
+                        valid = cands[~invalid][:self.nnegs]
+                        n_missing = self.nnegs - len(valid)
+                        if n_missing > 0:
+                            fallback = self.rng.integers(0, self.N, size=n_missing)
+                            valid = np.concatenate([valid, fallback])
+                        negs[i] = valid
+                    ix[mask, 2:] = negs
+                yield torch.from_numpy(ix)
 
 
+            '''
+            for d in np.unique(target_depths):
+                mask = target_depths == d
+                n = mask.sum()
+                J, q = self.alias_tables[d]
+                # Tirage vectorisé pour tous les u de cette profondeur d'un coup
+                candidates = self._alias_draw(J, q, size=n * self.nnegs * 2).reshape(n, -1)
+                batch_us = us[mask]
+                negs = np.empty((n, self.nnegs), dtype=np.int64)
+                for i, (u, cands) in enumerate(zip(batch_us, candidates)):
+                    pos = self.pos_neighbors[u]
+                    invalid = np.array([c == u or c in pos for c in cands])
+                    valid = cands[~invalid][:self.nnegs]
+                    n_missing = self.nnegs - len(valid)
+                    if n_missing > 0:
+                        fallback = self.rng.integers(0, self.N, size=n_missing)
+                        valid = np.concatenate([valid, fallback])
+                    negs[i] = valid
+                ix[mask, 2:] = negs
+            yield torch.from_numpy(ix)
+        '''
+
+    def __len__(self):
+        return int(np.ceil(len(self.edges) / self.batch_size))
+
+
+'''
     def __iter__(self):
         perm = np.random.permutation(len(self.edges))
         for start in range(0, len(self.edges), self.batch_size):
@@ -135,6 +243,4 @@ class BatchedDataset:
                 target_depth = self.depths[int(v)]
                 ix[j, 2:] = self._sample_neg(int(u), target_depth, self.nnegs)
             yield torch.from_numpy(ix)
- 
-    def __len__(self):
-        return int(np.ceil(len(self.edges) / self.batch_size))
+''' 

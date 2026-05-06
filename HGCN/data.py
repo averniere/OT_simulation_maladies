@@ -54,8 +54,8 @@ def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
     print(f"Termes HPO sans colonne (nœuds internes purs) : {len(missing_hpo)}")
 
     hpo_cols = [col for col in omim_df.columns if col in node2idx]
-    transformer = TfidfTransformer()
-    hpo_matrix = transformer.fit_transform(omim_df[hpo_cols].values)
+    # transformer = TfidfTransformer()
+    # hpo_matrix = transformer.fit_transform(omim_df[hpo_cols].values)
     # omim_df[hpo_cols] = hpo_matrix.toarray()
     print("Load features")
     
@@ -65,12 +65,12 @@ def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
         # omim_features[idx] = (hpo_matrix[:, i].toarray().ravel())
     for col in all_hpo_in_graph:
         idx = node2idx[col]
-        omim_features[idx] = hpo_matrix[:, hpo_cols.index(col)].toarray().ravel()
+        omim_features[idx] = omim_df[col].values.astype(np.float32)  # hpo_matrix[:, hpo_cols.index(col)].toarray().ravel()
     G_rev = hpo_graph.reverse()
     for node in nx.topological_sort(G_rev):  # du bas vers le haut
         idx = node2idx[node]
         if omim_features[idx].sum() == 0:
-            children = list(hpo_graph.predecessors(node))
+            children = list(hpo_graph.successors(node))
             if children:
                 child_feats = np.array([omim_features[node2idx[c]] for c in children])
                 if child_feats.sum() > 0:
@@ -105,7 +105,7 @@ def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
     data = {'adj_train': adj,'features': features}
     print("Load train, test and validation datasets")
     adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
-                    adj, args.val_prop, args.test_prop, args.split_seed)
+                    adj, args.val_prop, args.test_prop, args.split_seed, hpo_graph, node2idx)
     data['adj_train'] = adj_train
     data['train_edges'], data['train_edges_false'] = train_edges, train_edges_false
     data['val_edges'], data['val_edges_false'] = val_edges, val_edges_false
@@ -148,26 +148,54 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
     return features
 
 
-def mask_edges(adj, val_prop, test_prop, seed):
+def get_transitive_edges(hpo_graph, node2idx):
+
+    pos_edges = []
+
+    for node in hpo_graph.nodes():
+
+        descendants = nx.descendants(hpo_graph, node)
+
+        for desc in descendants:
+
+            pos_edges.append([
+                node2idx[node],
+                node2idx[desc]
+            ])
+
+    return np.array(pos_edges)
+
+
+def mask_edges(adj, val_prop, test_prop, seed, hpo_graph, node2idx):
     # Positive edges (voisins)
     print("Load positive edges")
     np.random.seed(seed)
-    x, y = scipy.sparse.triu(adj).nonzero()
-    pos_edges = np.array(list(zip(x, y)))
+    # x, y = scipy.sparse.triu(adj).nonzero()
+    # pos_edges = np.array(list(zip(x, y)))
+    pos_edges = get_transitive_edges(hpo_graph, node2idx)
     np.random.shuffle(pos_edges)
 
     # Negative edges (non-voisins)
     print("Load negative edges")
-
-    def sample_neg_edges(adj, n_samples, seed_offset):
-        np.random.seed(seed+seed_offset)
+    def sample_neg_edges(adj, n_samples, seed_offset, min_dist=5):
+        np.random.seed(seed + seed_offset)
         n = adj.shape[0]
+        undirected = nx.from_scipy_sparse_array(adj).to_undirected()
         neg_edges = []
         existing = set(zip(*adj.nonzero()))
         while len(neg_edges) < n_samples:
             i, j = np.random.randint(0, n, 2)
-            if i < j and (i, j) not in existing:
+            if i >= j:
+                continue
+            if (i, j) in existing:
+                continue
+            try:
+                d = nx.shortest_path_length(undirected, i, j)
+                if d >= min_dist:
+                    neg_edges.append([i, j])
+            except:
                 neg_edges.append([i, j])
+
         return np.array(neg_edges)
 
     m_pos = len(pos_edges)
@@ -182,7 +210,7 @@ def mask_edges(adj, val_prop, test_prop, seed):
     val_edges_false = sample_neg_edges(adj, n_val, 3)
     
     adj_train = scipy.sparse.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape)
-    adj_train = adj_train +adj_train.T
+    adj_train = adj_train  # +adj_train.T
     return (adj_train, torch.LongTensor(train_edges), torch.LongTensor(train_edges_false), torch.LongTensor(val_edges), torch.LongTensor(val_edges_false), torch.LongTensor(test_edges), torch.LongTensor(test_edges_false),)
 
     # train_nodes = set(train_edges[:, 0].tolist()) | set(train_edges[:, 1].tolist())
@@ -196,6 +224,7 @@ def mask_edges(adj, val_prop, test_prop, seed):
             # test_edges_false)  
 
 
+
 def process(adj, features, normalize_adj, normalize_feats):
     if scipy.sparse.isspmatrix(features):
         features = np.array(features.todense())
@@ -204,7 +233,7 @@ def process(adj, features, normalize_adj, normalize_feats):
     features = torch.Tensor(features)
     zero_rows = (features.sum(dim=1) == 0)
     print(f"Noeuds avec features nulles : {zero_rows.sum().item()}")
-    features[zero_rows] = torch.randn(zero_rows.sum(), features.shape[1]) * 1e-5
+    features[zero_rows] = torch.randn(zero_rows.sum(), features.shape[1]) * 1e-2
     if normalize_adj:
         adj = normalize(adj + scipy.sparse.eye(adj.shape[0]))
     adj = sparse_mx_to_torch_sparse_tensor(adj)

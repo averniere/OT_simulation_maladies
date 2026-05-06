@@ -27,7 +27,7 @@ for i, row in df_hpo.iterrows():
 for j, row in df_hpo.iterrows():
     for parent_id in row["parents"]:
         if parent_id in G_hpo:
-            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre
+            G_hpo.add_edge(parent_id, row['hp_id'])  # Permet d'avoir la racine au centre
 
 @dataclass
 class Args:
@@ -38,19 +38,19 @@ class Args:
     seed : int = 42
     normalize_adj: bool = False
     normalize_feats: bool = False
-    epochs : int = 2000
+    epochs : int = 2500
     min_epochs : int = 100
-    patience : int = 100
+    patience : int = 200
     lr : float = 1e-4
     lr_reduce_freq : int = None
-    weight_decay : float = 0.01
+    weight_decay : float = 0.05
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
     grad_clip : float = 0.5
     eval_freq : int = 5
     save : bool = True
     # Modèle
-    dropout : float = 0.01
-    c : float = 1.  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
+    dropout : float = 0.3
+    c : float = .01  # Rayon hyperbolique --> essayer avec None pour apprendre la courbure également ?
     r : float = 2.  # Paramètre du decoder
     t : float = 4.  # Paramètre du decoder
     bias : bool = True  # Utiliser un biais

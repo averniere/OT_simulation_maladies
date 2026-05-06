@@ -4,4 +4,6 @@ Embeddings/checkpoints
 *.pt
 *.png
 *.pkl
+*.json
+*.npy
 cache/

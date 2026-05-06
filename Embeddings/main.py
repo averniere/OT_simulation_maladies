@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import ast
+import datetime
+import time
 import os
 
 from poincare import PoincareManifold
@@ -43,29 +45,102 @@ objects = list(G_hpo.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
 edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
 
-DIM = 5
-EPOCHS = 500
-LR = 0.3
-BURN_IN = 50
-NNEGS = 20
-BATCH_SIZE = 32
+print(f"{len(edges)} arêtes et {len(objects)} noeuds")
+
+DIM = 10
+EPOCHS = 1500
+LR0 = 0.2
+BURN_IN = 100
+NNEGS = 50
+BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
+LR = LR0/32*BATCH_SIZE
+print(LR)
+
 manifold = PoincareManifold()
-model = Distance_PE(n=len(objects), dim=DIM, manifold=manifold, sparse=True)
-optimizer = RiemanianSGD(model.parameters(), lr=0.5, manifold=manifold)
+model = Distance_PE(
+    n=len(objects), 
+    dim=DIM, 
+    manifold=manifold, 
+    sparse=False,  # True à l'origine
+    learn_curvature=False, 
+    init_curvature=1.0,
+    weight_decay=0.
+    )
+
+optimizer = RiemanianSGD(model.parameters(), lr=LR, manifold=manifold, c=model.c.item())
+
+if model._log_c.requires_grad:
+    c_optimizer = torch.optim.Adam([model._log_c], lr=1e-2)
+else:
+    c_optimizer=None 
+
 data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
 
-losses, norms = train(model, data, optimizer,
-    epochs = EPOCHS,
-    lr = LR,
-    device = DEVICE,
-    burnin = BURN_IN,
-    eval_each = 10,
-    progress = True)
+
+def get_dir_name(models_dir):
+    """Gets a directory to save the model.
+
+    If the directory already exists, then append a new integer to the end of
+    it. This method is useful so that we don't overwrite existing models
+    when launching new jobs.
+
+    Args:
+        models_dir: The directory where all the models are.
+
+    Returns:
+        The name of a new directory to save the training logs and model weights.
+    """
+    if not os.path.exists(models_dir):
+        save_dir = os.path.join(models_dir, '0')
+        os.makedirs(save_dir)
+    else:
+        existing_dirs = np.array(
+                [d for d in os.listdir(models_dir) if os.path.isdir(os.path.join(models_dir, d))]
+        ).astype(int)
+        if len(existing_dirs) > 0:
+            dir_id = str(existing_dirs.max() + 1)
+        else:
+            dir_id = "1"
+        save_dir = os.path.join(models_dir, dir_id)
+        os.makedirs(save_dir)
+    return save_dir
 
 
+dt = datetime.datetime.now()
+date = f"{dt.year}_{dt.month}_{dt.day}"
+models_dir = os.path.join("logs/", date)
+save_dir = get_dir_name(models_dir)
+
+
+losses, norms = train(
+    model=model,
+    data=data,
+    optimizer=optimizer,
+    epochs=EPOCHS,
+    lr=LR,
+    device=DEVICE,
+    burnin=BURN_IN,
+    save_dir=save_dir,
+    objects=objects,
+    node2id=node2id,
+    edges=edges,
+    hyperparams={
+        'dim': DIM,
+        'epochs': EPOCHS,
+        'lr': LR,
+        'burnin': BURN_IN,
+        'n_neg': NNEGS,
+    },
+    patience=50,
+    early_stop=0.001,
+    c_optimizer=c_optimizer
+)
+
+
+'''
 torch.save({
     'model_state_dict': model.state_dict(),
     'data': data, 
@@ -84,6 +159,7 @@ torch.save({
 }, 'models/poincare_hpo.pt')
 
 os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}_WN{NNEGS}_{BATCH_SIZE}.pt"))
+'''
 
 # Diagnostic 3
 def visualize_training(model, losses, norm_history, objects, node2id, lr, burnin):
