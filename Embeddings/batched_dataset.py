@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import torch
+import networkx as nx
 from collections import deque
 from numpy.random import default_rng
 
@@ -47,9 +48,10 @@ class BatchedDataset:
         col 2..end  = non voisins (négatifs)
     """
  
-    def __init__(self, edges, objects, nnegs, batch_size, burnin=False, depth_temperature = 1.0):
+    def __init__(self, edges, objects, nnegs, batch_size, burnin=False, depth_temperature = 1.0, max_edges_per_epoch=None):
         self.edges = edges
         self.edges_arr = np.array(edges, dtype=np.int64)
+        self.max_edges_per_epoch = max_edges_per_epoch
         self.N = len(objects)
         self.nnegs = nnegs
         self.batch_size = batch_size
@@ -63,12 +65,21 @@ class BatchedDataset:
         for u, v in edges:
             self.pos_neighbors[int(u)].add(int(v))
             counts[int(v)] += 1.0    
+        self.pos_neighbors_arr = [np.array(list(s), dtype=np.int64) for s in self.pos_neighbors]
         
         # Profondeurs
         edge_index = torch.tensor(edges, dtype=torch.long).T
         self.depths = compute_depths(edge_index, self.N).numpy()
         self._build_alias_tables()
+        self._build_reachable()
 
+    def _build_reachable(self, max_depth=2):
+        G = nx.DiGraph()
+        G.add_edges_from(self.edges_arr)
+        self.reachable = {}
+        for u in range(self.N):
+            reached = nx.single_source_shortest_path_length(G, u, cutoff=max_depth)
+            self.reachable[u] = np.array([v for v, d in reached.items() if d > 0], dtype=np.int64)
 
     def _build_alias_tables(self):
         """Calcule pour chaque profondeur unique un vecteur de pondération/proba sur les N noeuds."""
@@ -149,7 +160,7 @@ class BatchedDataset:
             negs.append(valid[:n_easy])
 
         return np.concatenate(negs)
-
+    
         '''
         candidates = self._alias_draw(J, q, size=nnegs * 2)
         pos = self.pos_neighbors[u]
@@ -163,8 +174,46 @@ class BatchedDataset:
 
         return valid
         '''
+    def __iter__(self, model=None, hard_ratio=0.0):
+    
+        perm = np.random.permutation(len(self.edges_arr))
+    
+        for start in range(0, len(self.edges_arr), self.batch_size):
+            chunk = perm[start:start + self.batch_size]
+            B = len(chunk)
+            batch_edges = self.edges_arr[chunk]
+            us = batch_edges[:, 0]
+            vs = batch_edges[:, 1]
+            
+            ix = np.empty((B, 2 + self.nnegs), dtype=np.int64)
+            ix[:, 0] = us
+            ix[:, 1] = vs
 
-    def __iter__(self, model=None, hard_ratio=0.5):
+            target_depths = self.depths[vs]
+
+            for d in np.unique(target_depths):
+                mask = target_depths == d
+                n = mask.sum()
+                J, q = self.alias_tables[d]
+                batch_us = us[mask]
+
+                candidates = self._alias_draw(J, q, size=n * self.nnegs * 4).reshape(n, -1)
+
+                is_self = candidates == batch_us[:, None]
+                negs = np.empty((n, self.nnegs), dtype=np.int64)
+                for i, u in enumerate(batch_us):
+                    invalid = is_self[i]
+                    invalid |= np.isin(candidates[i], self.pos_neighbors_arr[u])
+                    valid = candidates[i][~invalid][:self.nnegs]
+                    n_missing = self.nnegs - len(valid)
+                    if n_missing > 0:
+                        valid = np.concatenate([valid, self.rng.integers(0, self.N, size=n_missing)])
+                    negs[i] = valid
+                ix[mask, 2:] = negs
+            yield torch.from_numpy(ix)
+
+    '''
+    def __iter__(self, model=None, hard_ratio=.8):
         perm = np.random.permutation(len(self.edges))
         edges_arr = np.array(self.edges)  # (E, 2) — à précalculer dans __init__
         for start in range(0, len(self.edges), self.batch_size):
@@ -202,28 +251,7 @@ class BatchedDataset:
                     ix[mask, 2:] = negs
                 yield torch.from_numpy(ix)
 
-
-            '''
-            for d in np.unique(target_depths):
-                mask = target_depths == d
-                n = mask.sum()
-                J, q = self.alias_tables[d]
-                # Tirage vectorisé pour tous les u de cette profondeur d'un coup
-                candidates = self._alias_draw(J, q, size=n * self.nnegs * 2).reshape(n, -1)
-                batch_us = us[mask]
-                negs = np.empty((n, self.nnegs), dtype=np.int64)
-                for i, (u, cands) in enumerate(zip(batch_us, candidates)):
-                    pos = self.pos_neighbors[u]
-                    invalid = np.array([c == u or c in pos for c in cands])
-                    valid = cands[~invalid][:self.nnegs]
-                    n_missing = self.nnegs - len(valid)
-                    if n_missing > 0:
-                        fallback = self.rng.integers(0, self.N, size=n_missing)
-                        valid = np.concatenate([valid, fallback])
-                    negs[i] = valid
-                ix[mask, 2:] = negs
-            yield torch.from_numpy(ix)
-        '''
+    '''
 
     def __len__(self):
         return int(np.ceil(len(self.edges) / self.batch_size))

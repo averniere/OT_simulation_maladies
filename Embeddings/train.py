@@ -80,7 +80,7 @@ def train(
             model.manifold.normalize(model.weight.data, model.c)
 
             epoch_loss[i_batch] = loss.detach().cpu().item()
-
+            
         avg_loss = epoch_loss.mean().item()
         losses.append(avg_loss)
 

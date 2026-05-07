@@ -47,11 +47,11 @@ edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.i
 
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
-DIM = 10
+DIM = 15
 EPOCHS = 1500
-LR0 = 0.2
+LR0 = 0.3
 BURN_IN = 100
-NNEGS = 50
+NNEGS = 100
 BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
@@ -66,7 +66,7 @@ model = Distance_PE(
     manifold=manifold, 
     sparse=False,  # True à l'origine
     learn_curvature=False, 
-    init_curvature=1.0,
+    init_curvature=1.2,
     weight_decay=0.
     )
 
