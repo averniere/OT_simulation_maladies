@@ -9,6 +9,7 @@ import time
 import os
 
 from poincare import PoincareManifold
+from lorentz import LorentzManifold
 from model import Distance_PE
 from RSGD import RiemanianSGD
 from batched_dataset import BatchedDataset
@@ -29,7 +30,7 @@ for i, row in df_hpo.iterrows():
 for j, row in df_hpo.iterrows():
     for parent_id in row["parents"]:
         if parent_id in G_hpo:
-            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre
+            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre            
 
 # TEST : graphe non orienté ------------------------------------
 G_hpo_tc = nx.transitive_closure(G_hpo)  # fermeture transitive
@@ -46,6 +47,26 @@ node2id = {n: i for i, n in enumerate(objects)}
 edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
 
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
+
+
+def partial_transitive_closure(edges, max_depth=3):
+    G = nx.DiGraph()
+    G.add_edges_from(edges)
+    new_edges = set(map(tuple, edges))
+    
+    for u in G.nodes():
+        # BFS limité à max_depth
+        visited = nx.single_source_shortest_path_length(G, u, cutoff=max_depth)
+        for v, depth in visited.items():
+            if depth > 0:
+                new_edges.add((u, v))
+    
+    return list(new_edges)
+
+
+edges_closed = partial_transitive_closure(edges, max_depth=3)
+print(f"Arêtes avant : {len(edges)}, après : {len(edges_closed)}")
+
 
 DIM = 15
 EPOCHS = 1500
@@ -66,7 +87,7 @@ model = Distance_PE(
     manifold=manifold, 
     sparse=False,  # True à l'origine
     learn_curvature=False, 
-    init_curvature=1.2,
+    init_curvature=1.,
     weight_decay=0.
     )
 
@@ -126,7 +147,7 @@ losses, norms = train(
     save_dir=save_dir,
     objects=objects,
     node2id=node2id,
-    edges=edges,
+    edges=edges_closed,
     hyperparams={
         'dim': DIM,
         'epochs': EPOCHS,
@@ -135,7 +156,7 @@ losses, norms = train(
         'n_neg': NNEGS,
     },
     patience=50,
-    early_stop=0.001,
+    early_stop=0.005,
     c_optimizer=c_optimizer
 )
 

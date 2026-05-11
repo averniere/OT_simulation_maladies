@@ -45,7 +45,7 @@ def train(
         if data.burnin:
             hard_ratio=0
         else:
-            har_ratio=0.5
+            hard_ratio=0.5
         current_lr  = lr * _lr_multiplier if data.burnin else lr/(1 + 0.001 * (epoch - burnin))
         epoch_loss = torch.zeros(len(data))
         loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
