@@ -4,3 +4,4 @@ scikit-learn
 networkx
 matplotlib
 plotly
+POT
