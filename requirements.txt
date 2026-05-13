@@ -4,4 +4,3 @@ scikit-learn
 networkx
 matplotlib
 plotly
-umap
