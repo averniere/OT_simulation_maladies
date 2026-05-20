@@ -121,6 +121,7 @@ def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
     results = {k: 0 for k in top_k}
     pairs = {}
     ranks = []
+    marginal = np.sum(P, axis=1)
 
     for (i, j_true) in gt_set:
         # Colonnes triées par masse décroissante pour la ligne i
@@ -135,10 +136,10 @@ def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
             if rank <= k:
                 results[k] += 1
                 if (i, j_true) not in pairs.keys():
-                    pairs[(i, j_true)]=[k, C[i, j_true]]
+                    pairs[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal[i]]
                     
         if (i, j_true) not in pairs.keys():
-            pairs[(i, j_true)]=[0, C[i, j_true]]
+            pairs[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal[i]]
             
     n = len(gt_set)
     print(f"Paires évaluées : {n}")
