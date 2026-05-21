@@ -43,17 +43,6 @@ def f_active_terms(row, hpo_cols, node2id, deprecated):
     return active
     
 
-def get_ancestors0(G, node):
-    visited = set()
-    queue = list(G.successors(node))
-    while queue:
-        current = queue.pop()
-        if current not in visited:
-            visited.add(current)
-            queue.extend(G.successors(current))
-    return visited
-
-
 def len_active_terms(row, hpo_cols, node2id, deprecated):
     active=[]
     for term in hpo_cols:
