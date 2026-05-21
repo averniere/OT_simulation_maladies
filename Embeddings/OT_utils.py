@@ -3,7 +3,9 @@ import ot
 import numpy as np
 from ot import sinkhorn
 from tqdm import tqdm
+from joblib import Parallel, delayed
 from poincare import PoincareManifold
+from data_utils import f_active_terms
 
 
 def compute_cost_matrix(omim, orpha):
@@ -62,6 +64,64 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
         ref = np.dot(np.abs(omim_matrix[i, :] - orpha_matrix[j, :]), norms)
         new = C[i, j]
         print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
+    return C
+
+
+def cost_hpos(hpoi, hpoj):
+    Ei = torch.tensor(hpoi, dtype=torch.float64).unsqueeze(1)
+    Ej = torch.tensor(hpoj, dtype=torch.float64).unsqueeze(0)
+    manifold = PoincareManifold()
+    dists = manifold.distance(Ei, Ej, c=1)
+    return dists.detach().numpy()
+
+
+def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated):
+    n=len(df_omim)
+    m=len(df_orpha)
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+    model.eval()
+    W = model.weight.detach().cpu().numpy()
+    print("Precompute...")
+
+    def precompute(df):
+        terms, weights = [], []
+        for _, row in df.iterrows():
+            active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
+            terms.append(active)
+            weights.append(np.ones(len(active)) / len(active) if active else np.array([]))
+        return terms, weights   
+    print("Finished !")
+    terms_i, weights_i = precompute(df_omim)
+    terms_j, weights_j = precompute(df_orpha)
+
+    all_terms = list({h for ts in terms_i + terms_j for h in ts})
+    term2idx = {h: k for k, h in enumerate(all_terms)}
+    E = W[[node2id_w[h] for h in all_terms]]
+
+    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]
+    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]
+
+    C = np.zeros((n,m))
+
+    def compute_row(i):
+        if not idx_i[i]:
+            return i, np.zeros(len(terms_j))
+        Ei = E[idx_i[i]]
+        row = np.zeros(len(terms_j))
+        for j in range(len(terms_j)):
+            if not idx_j[j]:
+                continue
+            Ej = E[idx_j[j]]
+            M  = cost_hpos(Ei, Ej) 
+            _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
+        return i, row
+
+    results = Parallel(n_jobs=-1)(
+        delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
+    )
+    C = np.zeros((len(df_omim), len(df_orpha)))
+    for i, row in results:
+        C[i] = row
     return C
 
 
