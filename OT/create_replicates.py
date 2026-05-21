@@ -35,8 +35,8 @@ for i in range(n_replicats):
     os.rename("results/simul.csv",result_file)
 
     # renommer et stocker les fichiers target
-    target_file = os.path.join("data/simuls", f"target_{i+1}.csv")
-    os.rename("data/simuls/target.csv", target_file)
+    target_file = os.path.join("../data/simuls", f"target_{i+1}.csv")
+    os.rename("../data/simuls/target.csv", target_file)
     
     # Supprimer le fichier volumineux de base
     os.remove("results/simu_brut.csv.gz")

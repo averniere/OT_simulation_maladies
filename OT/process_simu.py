@@ -396,7 +396,7 @@ def process_simulation(source_data, n_complex_list, n_match_list, noise_levels, 
     return global_result, df_truth, target_data
 
 
-profils_omim = pd.read_csv("data/profils_omim.csv.gz", index_col=0)
+profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 
 
 results, df_truth, df_target = process_simulation(
@@ -412,4 +412,4 @@ results, df_truth, df_target = process_simulation(
 )
 
 results.to_csv('results/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
-df_target.to_csv('data/simuls/target.csv', sep= ';', index=False)
+df_target.to_csv('../data/simuls/target.csv', sep= ';', index=False)
