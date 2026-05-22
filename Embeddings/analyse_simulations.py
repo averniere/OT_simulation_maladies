@@ -1,9 +1,17 @@
 #Import
+import torch
 import pandas as pd
 import numpy as np
+import networkx as nx
+import re 
+
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
+from poincare import PoincareManifold
+from model import Distance_PE
+from information_content import deprecated
+from data_utils import *
 from OT_utils import *
 
 
@@ -25,7 +33,7 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
         groupe = complex_names[i : i + group_size]  #['Complexe_1', 'Complexe_2'] si group_size = 2
         groups.append(groupe)
 
-    mendelian_list = list(df_mendelien.index)
+    mendelian_list = list(df_mendelien.index.astype(int))
 
     used_mendelian = set()  # mendéliennes déjà utilisées dans les groupes précédents
 
@@ -99,8 +107,7 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
         profile = (somme_par_hp > 0).astype(int)
 
         complex_profiles.append(profile)
-        print(mendelian_sources)
-        complex_groundtruth.append(",".join(mendelian_sources))
+        complex_groundtruth.append(",".join(str(x) for x in mendelian_sources))
 
     df_complex = pd.DataFrame(complex_profiles, index=complex_names)
     df_truth = pd.DataFrame({"Complex_Disease": complex_names,"Mendelian_Sources": complex_groundtruth})
@@ -223,8 +230,9 @@ def similarity_matrix(df, mendelian_list):
     maladies_mendeliennes_df = set()
     for sublist in df['Mendelian_Sources'].str.split(','):   # pour chaque ligne, on split par virgule
         for m in sublist:                                    # pour chaque mendélienne dans la liste
-            maladies_mendeliennes_df.add(m)
-    maladies_mendeliennes_totale = list(sorted(maladies_mendeliennes_df.union(mendelian_list)))  # Ajouter des maladies supplémentaires
+            maladies_mendeliennes_df.add(int(m.strip()))
+    maladies_mendeliennes_totale = list(sorted(
+        maladies_mendeliennes_df.union({int(m) for m in mendelian_list})))  # Ajouter des maladies supplémentaires
     n = len(maladies_mendeliennes_totale)
 
     # Création d'un index pour les maladies mendéliennes
@@ -235,11 +243,13 @@ def similarity_matrix(df, mendelian_list):
 
     # Remplissage de la matrice
     for maladies in df["Mendelian_Sources"]:
-        maladies_associees = maladies.split(',')
+        maladies_associees = [int(m.strip()) for m in maladies.split(',')] 
         indices = [mendeliennes_index[m] for m in maladies_associees]
-        for i in indices:
-            for j in indices:
-                matrice_binaire[i, j] = 1
+        #for i in indices:
+            #for j in indices:
+                #matrice_binaire[i, j] = 1
+        ix = np.ix_(indices, indices)
+        matrice_binaire[ix] = 1
     for i in range(n):
         matrice_binaire[i, i] = 1.0
     return (matrice_binaire, maladies_mendeliennes_totale)
@@ -286,10 +296,12 @@ def filtrer_maladies(df, matrice, colonne_maladies, all_disease = False):
         )
 
         # Filtrer la matrice avec les maladies trouvées
-        maladies = list(maladies)  # Convertir en liste pour l'utilisation avec les index
+        #maladies = list(maladies)  # Convertir en liste pour l'utilisation avec les index
+        maladies = {int(m.strip()) for liste in df[colonne_maladies].dropna() for m in liste.split(",")}
         matrice_filtre = matrice.loc[
             matrice.index.intersection(maladies)]
         return matrice_filtre
+
 
 def process_simulation(
     source_data, 
@@ -306,8 +318,10 @@ def process_simulation(
     deprecated
     ):
 
-    global_result = pd.DataFrame()
-    global_truth = pd.DataFrame()
+    #global_result = pd.DataFrame()
+    all_results = []
+    all_truths = []
+    #global_truth = pd.DataFrame()
 
     for overlap_rate in overlap_test:
         for n_complex in n_complex_list:
@@ -336,34 +350,46 @@ def process_simulation(
                 df_truth['n_match'] = n_match
                 df_truth['overlap_rate'] = overlap_rate
                 df_truth['n_complex'] = n_complex
-                global_truth = pd.concat([global_truth, df_truth], ignore_index=True)
+                #global_truth = pd.concat([global_truth, df_truth], ignore_index=True)
+                all_truths.append(df_truth)
 
                 for noise_level in noise_levels:
 
                     # Bruit sur les profils complexes
                     noisy_matrix = add_noise_to_matrix(target_data, noise_level)
-
+            
                     # Calcul des distances
-                    cost_matrix = compute_cost_matrix_wasserstein2(source_data_filtre.values, noisy_matrix.values, node2id, model, deprecated)
-                    print(cost_matrix.shape)
+                    print("Source data filtré")
+                    print(source_data_filtre.shape)
+                    print(noisy_matrix.shape)
+                    cost_matrix = compute_costs_matrix_wasserstein3(source_data_filtre, noisy_matrix, node2id, model, deprecated)
+                    print("Cost matrix :", cost_matrix.shape)
+                    print(f"Mean = {np.mean(cost_matrix)}")
+                    print(f"Min = {np.min(cost_matrix)}")
+                    print(f"Max = {np.max(cost_matrix)}")
+                    print(f"Median = {np.median(cost_matrix)}")
                     cost_matrix_df = pd.DataFrame(cost_matrix, index=source_data_filtre.index, columns=target_data.index)
                     
                     # Raw distance
                     OT_type = "Raw"
                     jaccard_distances_results = filter_by_quantile(cost_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
-                    global_result = pd.concat([global_result, jaccard_distances_results], ignore_index=True)
+                    #global_result = pd.concat([global_result, jaccard_distances_results], ignore_index=True)
+                    all_results.append(jaccard_distances_results)
 
                     # Distributions de poids uniformes
                     a = np.ones(len(source_data_filtre.index)) / len(source_data_filtre.index)
                     b = np.ones(len(target_data.index)) / len(target_data.index)
 
                     # Optimal transport
+                    print("Compute transport...")
                     epsilon0 = epsilon*np.mean(cost_matrix)
                     ot_plan, ot_cost = compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
-                    transport_matrix_df = pd.DataFrame(transport_matrix, index=source_data_filtre.index, columns=target_data.index)
+                    print("Finished !")
+                    transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
                     OT_type = "OT"
                     ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
-                    global_result = pd.concat([global_result, ot_results], ignore_index=True)
+                    #global_result = pd.concat([global_result, ot_results], ignore_index=True)
+                    all_results.append(ot_results)
 
                     # OT Laplacien
                     Xs_real = source_data_filtre.to_numpy()
@@ -376,9 +402,12 @@ def process_simulation(
                             gamma_opt_df = pd.DataFrame(gamma_opt, index=source_data_filtre.index, columns=target_data.index)
                             OT_type = f"OT regularized, {S_name}"
                             laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
-                            global_result = pd.concat([global_result, laplace_results], ignore_index=True)
+                            #global_result = pd.concat([global_result, laplace_results], ignore_index=True)
+                            all_results.append(laplace_results)
 
-    #avec la vérité terrain
+    global_result = pd.concat(all_results, ignore_index=True)
+    global_truth = pd.concat(all_truths, ignore_index=True)
+    # Avec la vérité terrain
     global_result = global_result.merge(
         global_truth[['Complex_Disease', 'n_match', 'Mendelian_Sources', 'overlap_rate']],
         on=['Complex_Disease', 'n_match', 'overlap_rate'],
@@ -387,3 +416,101 @@ def process_simulation(
 
     return global_result, df_truth, target_data
 
+
+# Débuggage du code 
+hp_ids = []
+parents_list = []
+
+with open("../data/HPOs.csv", "r") as f:
+    next(f)
+    for line in f:
+        hp_id = line.split(';')[0]
+        
+        # Extraire uniquement la liste contenant des IDs HP:XXXXXXX
+        match = re.search(r"\[([^\]]*'HP:\d{7}'[^\]]*)\]", line)
+        if match:
+            parents = re.findall(r"HP:\d{7}", match.group(0))
+        else:
+            parents = []
+        
+        hp_ids.append(hp_id)
+        parents_list.append(parents)
+
+df_hpo = pd.DataFrame({'hp_id': hp_ids, 'parents': parents_list})
+
+G_hpo_work = nx.DiGraph()
+for hp_id in hp_ids:
+    G_hpo_work.add_node(hp_id)
+for hp_id, parents in zip(hp_ids, parents_list):
+    for parent_id in parents:
+        if parent_id in G_hpo_work:
+            G_hpo_work.add_edge(hp_id, parent_id)
+
+objects_w = list(G_hpo_work.nodes())
+node2id_w = {n: i for i, n in enumerate(objects_w)}
+
+
+def read_hpoa(path):
+    with open(path, 'r') as f:
+        skip = sum(1 for line in f if line.startswith('#'))
+    return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
+
+
+df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa')
+df_hpoa['disease_name'] = df_hpoa['disease_name'].str.lower().str.strip().str.replace(r'[\s\-]+', ' ', regex=True)
+df_hpoa.tail()
+
+correspondence_exacte = build_disease_correspondence(df_hpoa)
+print(f"Correspondances trouvées : {len(correspondence_exacte)}")
+
+# Construction de deux dataframes à partir de df_hpoa
+df_pivot = df_hpoa[['database_id', 'hpo_id']].drop_duplicates()
+df_pivot['values']=1.
+df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', columns='hpo_id', aggfunc='max', fill_value=0)
+df_pivot.columns.name = None
+df_pivot = df_pivot.reset_index()
+
+df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
+df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
+
+df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
+df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
+
+hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+
+profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
+profils_omim = profils_omim.reset_index()
+hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
+
+checkpoint = torch.load('logs/2026_5_7/12/model_final.pt', map_location='cpu', weights_only=False)
+objects = checkpoint['objects']
+hp = checkpoint['hyperparams']
+
+manifold = PoincareManifold()
+model = Distance_PE(
+    n=len(objects), dim=hp['dim'],
+    manifold=manifold, sparse=False, 
+    learn_curvature=False, init_curvature=1., 
+    weight_decay=0
+    )
+model.load_state_dict(checkpoint['model_state_dict'])
+model.eval()
+
+results, df_truth, df_target = process_simulation(
+    source_data=profils_omim[hpo_cols0],
+    n_complex_list=[50],               
+    n_match_list=[10],  # , 50],              
+    noise_levels=[0, 0.05, 0.1, 0.2],   
+    quantiles=list(np.arange(0.95, 0.999, 0.003)),
+    epsilon=0.1,
+    overlap_test=[0, 0.6],    
+    group_size=10,                     
+    eta_list=[1000],
+    model=model,
+    node2id=node2id_w,
+    deprecated=deprecated
+)
+
+results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
+df_target.to_csv("simuls/target.csv", sep=';', index=False)
+df_truth.to_csv("simuls/truth.csv", sep=';', index=False)

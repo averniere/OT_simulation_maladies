@@ -75,6 +75,31 @@ def cost_hpos(hpoi, hpoj):
     return dists.detach().numpy()
 
 
+def compute_all_distances(emb_i, all_emb_j):
+    """
+    emb_i : np.array (ki, d)
+    all_emb_j : liste de np.array (kj, d)
+    Retourne une liste de matrices de distances
+    """
+    # Concaténer tous les embeddings j
+    sizes_j = [len(e) for e in all_emb_j]
+    E_all_j = np.concatenate(all_emb_j, axis=0)  # (sum_kj, d)
+    
+    Ei = torch.tensor(emb_i, dtype=torch.float64).unsqueeze(1)       # (ki, 1, d)
+    Ej = torch.tensor(E_all_j, dtype=torch.float64).unsqueeze(0)     # (1, sum_kj, d)
+    
+    manifold = PoincareManifold()
+    dists = manifold.distance(Ei, Ej, c=1).detach().numpy()          # (ki, sum_kj)
+    
+    # Découper selon les tailles
+    matrices = []
+    start = 0
+    for s in sizes_j:
+        matrices.append(dists[:, start:start+s])
+        start += s
+    return matrices
+
+
 def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated):
     n=len(df_omim)
     m=len(df_orpha)
@@ -84,22 +109,30 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     print("Precompute...")
 
     def precompute(df):
+        '''
+        Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
+        le vecteur de poids uniformes associés.
+        '''
         terms, weights = [], []
         for _, row in df.iterrows():
             active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
             terms.append(active)
             weights.append(np.ones(len(active)) / len(active) if active else np.array([]))
-        return terms, weights   
+        return terms, weights  
+
     print("Finished !")
-    terms_i, weights_i = precompute(df_omim)
-    terms_j, weights_j = precompute(df_orpha)
+    terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
+    terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
 
-    all_terms = list({h for ts in terms_i + terms_j for h in ts})
+    all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
     term2idx = {h: k for k, h in enumerate(all_terms)}
-    E = W[[node2id_w[h] for h in all_terms]]
+    E = W[[node2id_w[h] for h in all_terms]]  # Embeddings des termes actifs
 
-    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]
-    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]
+    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
+    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
+
+    emb_i = [E[idx] if idx else None for idx in idx_i]  # [Ajout] Vecteurs d'embeddings par maladies sources
+    emb_j = [E[idx] if idx else None for idx in idx_j]  # [Ajout] Vecteurs d'embeddings par maladies destinations
 
     C = np.zeros((n,m))
 
@@ -119,6 +152,78 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     results = Parallel(n_jobs=-1)(
         delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
     )
+    C = np.zeros((len(df_omim), len(df_orpha)))
+    for i, row in results:
+        C[i] = row
+    return C
+
+
+def compute_costs_matrix_wasserstein3(df_omim, df_orpha, node2id_w, model, deprecated):
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+    model.eval()
+    W = model.weight.detach().cpu().numpy()
+
+    def precompute(df):
+        terms, weights = [], []
+        for _, row in df.iterrows():
+            active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
+            w = np.ones(len(active)) / len(active) if active else np.array([1.0])
+            terms.append(active)
+            weights.append(w)
+        return terms, weights
+
+    terms_i, weights_i = precompute(df_omim)
+    terms_j, weights_j = precompute(df_orpha)
+
+    all_terms = list({h for ts in terms_i + terms_j for h in ts})
+    term2idx = {h: k for k, h in enumerate(all_terms)}
+    E = W[[node2id_w[h] for h in all_terms]]
+
+    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]
+    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]
+
+    emb_i = [E[idx] if idx else None for idx in idx_i]
+    emb_j = [E[idx] if idx else None for idx in idx_j]
+
+    # Filtrer les j valides une seule fois
+    valid_j = [j for j, e in enumerate(emb_j) if e is not None]
+    emb_j_valid = [emb_j[j] for j in valid_j]
+    weights_j_valid = [weights_j[j] for j in valid_j]
+
+    def compute_row(i):
+        row = np.zeros(len(emb_j))
+        if emb_i[i] is None:
+            return i, row
+        
+        # Une seule passe torch pour toutes les distances
+        # cost_matrices = compute_all_distances(emb_i[i], emb_j_valid)
+        
+        for k, j in enumerate(valid_j):
+            #_, row[j] = compute_transport(
+                #cost_matrices[k], weights_i[i], weights_j_valid[k])
+            '''    
+            projections = [10, 20, 50, 100, 200, 500, 1000]
+            n_repeat = 20  # répétitions pour estimer la variance
+            results = {}
+            for n_proj in projections:
+                vals = [ot.sliced_wasserstein_distance(
+                    emb_i[i], emb_j[j],
+                    a=weights_i[i], b=weights_j[j],
+                    n_projections=n_proj, seed=k)
+                    for k in range(n_repeat)]
+                results[n_proj] = (np.mean(vals), np.std(vals))
+                print(f"n={n_proj:>5}  mean={results[n_proj][0]:.4f}  std={results[n_proj][1]:.5f}")    
+            '''
+            row[j] = ot.sliced_wasserstein_distance(
+                emb_i[i], emb_j_valid[k], 
+                a=weights_i[i], b=weights_j_valid[k],
+                n_projections=100)
+        return i, row
+
+    results = Parallel(n_jobs=-1)(
+        delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
+    )
+
     C = np.zeros((len(df_omim), len(df_orpha)))
     for i, row in results:
         C[i] = row
