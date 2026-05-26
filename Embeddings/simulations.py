@@ -303,6 +303,26 @@ def filtrer_maladies(df, matrice, colonne_maladies, all_disease = False):
         return matrice_filtre
 
 
+def evaluate_rank(ot_plan_df, df_truth):
+    mendelian_index = np.array(ot_plan_df.index)
+    ot_matrix = ot_plan_df.values
+    ranked_matrix = np.argsort(-ot_matrix, axis=0)  # shape (n_mendelian, n_complex)
+    rank_matrix = np.argsort(ranked_matrix, axis=0) + 1
+    errors = []
+    for i, row in df_truth.iterrows():
+        complex_disease = row["Complex_Disease"]
+        true_mendelians = row["Mendelian_Sources"]
+        col_idx = ot_plan_df.columns.get_loc(complex_disease)
+        true_indices = np.where(np.isin(mendelian_index, true_mendelians))[0]
+        if len(true_indices) == 0:
+            continue
+        N = len(true_indices)
+        estimated_ranks = rank_matrix[true_indices, col_idx]
+        errors.append(estimated_ranks.sum() - N * (N + 1) / 2)
+    return np.mean(errors) if errors else np.nan
+        
+
+
 def process_simulation(
     source_data, 
     n_complex_list, 
@@ -362,7 +382,7 @@ def process_simulation(
                     print("Source data filtré")
                     print(source_data_filtre.shape)
                     print(noisy_matrix.shape)
-                    cost_matrix = compute_costs_matrix_wasserstein3(source_data_filtre, noisy_matrix, node2id, model, deprecated)
+                    cost_matrix = compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
                     print("Cost matrix :", cost_matrix.shape)
                     print(f"Mean = {np.mean(cost_matrix)}")
                     print(f"Min = {np.min(cost_matrix)}")
@@ -383,11 +403,13 @@ def process_simulation(
                     # Optimal transport
                     print("Compute transport...")
                     epsilon0 = epsilon*np.mean(cost_matrix)
+                    print("Regularization, epsilon : ", epsilon0)
                     ot_plan, ot_cost = compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
                     print("Finished !")
                     transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
                     OT_type = "OT"
                     ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                    ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
                     #global_result = pd.concat([global_result, ot_results], ignore_index=True)
                     all_results.append(ot_results)
 
@@ -402,6 +424,7 @@ def process_simulation(
                             gamma_opt_df = pd.DataFrame(gamma_opt, index=source_data_filtre.index, columns=target_data.index)
                             OT_type = f"OT regularized, {S_name}"
                             laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                            laplace_results["mean_rank_error"] = evaluate_rank(gamma_opt_df, df_truth)
                             #global_result = pd.concat([global_result, laplace_results], ignore_index=True)
                             all_results.append(laplace_results)
 
