@@ -131,24 +131,29 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
     idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
 
-    emb_i = [E[idx] if idx else None for idx in idx_i]  # [Ajout] Vecteurs d'embeddings par maladies sources
-    emb_j = [E[idx] if idx else None for idx in idx_j]  # [Ajout] Vecteurs d'embeddings par maladies destinations
+    # emb_i = [E[idx] if idx else None for idx in idx_i]  # [Ajout] Vecteurs d'embeddings par maladies sources
+    # emb_j = [E[idx] if idx else None for idx in idx_j]  # [Ajout] Vecteurs d'embeddings par maladies destinations
 
     C = np.zeros((n,m))
+
+    print("Precomputing full HPO distance matrix...")
+    D_full = np.sum((E[:, None, :] - E[None, :, :]) ** 2, axis=-1)  # (K, K)
+    print(f"HPO distance matrix: {D_full.shape}")
 
     def compute_row(i):
         if not idx_i[i]:
             return i, np.zeros(len(terms_j))
-        Ei = E[idx_i[i]]
+        # Ei = E[idx_i[i]]
         row = np.zeros(len(terms_j))
         for j in range(len(terms_j)):
             if not idx_j[j]:
                 continue
-            Ej = E[idx_j[j]]
-            M  = cost_hpos(Ei, Ej) 
+            # Ej = E[idx_j[j]]
+            # M  = cost_hpos(Ei, Ej) 
+            M = D_full[np.ix_(idx_i[i], idx_j[j])]
             _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
         return i, row
-
+    
     results = Parallel(n_jobs=-1)(
         delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
     )

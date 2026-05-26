@@ -50,7 +50,7 @@ recall_prec = simu.drop(columns = ['Complex_Disease', 'Mendelian_Sources'] + col
 
 
 # Colonnes sur lesquelles regrouper
-group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex']
+group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex', 'eta']
 
 # Calcul des moyennes
 result = recall_prec.groupby(group_cols, as_index=False).mean()

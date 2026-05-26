@@ -312,6 +312,8 @@ def evaluate_rank(ot_plan_df, df_truth):
     for i, row in df_truth.iterrows():
         complex_disease = row["Complex_Disease"]
         true_mendelians = row["Mendelian_Sources"]
+        if isinstance(true_mendelians, str):
+            true_mendelians = [m.strip() for m in true_mendelians.split(",")]
         col_idx = ot_plan_df.columns.get_loc(complex_disease)
         true_indices = np.where(np.isin(mendelian_index, true_mendelians))[0]
         if len(true_indices) == 0:
@@ -410,6 +412,7 @@ def process_simulation(
                     OT_type = "OT"
                     ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
                     ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
+                    ot_results["eta"] = 0.0
                     #global_result = pd.concat([global_result, ot_results], ignore_index=True)
                     all_results.append(ot_results)
 
@@ -424,6 +427,7 @@ def process_simulation(
                             gamma_opt_df = pd.DataFrame(gamma_opt, index=source_data_filtre.index, columns=target_data.index)
                             OT_type = f"OT regularized, {S_name}"
                             laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                            laplace_results["eta"] = eta
                             laplace_results["mean_rank_error"] = evaluate_rank(gamma_opt_df, df_truth)
                             #global_result = pd.concat([global_result, laplace_results], ignore_index=True)
                             all_results.append(laplace_results)
@@ -522,13 +526,13 @@ model.eval()
 results, df_truth, df_target = process_simulation(
     source_data=profils_omim[hpo_cols0],
     n_complex_list=[50],               
-    n_match_list=[10],  # , 50],              
-    noise_levels=[0, 0.05, 0.1, 0.2],   
+    n_match_list=[25],  # [10 , 50],              
+    noise_levels=[0],  # [0, 0.05, 0.1, 0.2],   
     quantiles=list(np.arange(0.95, 0.999, 0.003)),
     epsilon=0.1,
-    overlap_test=[0, 0.6],    
+    overlap_test=[0, 0.5],    
     group_size=10,                     
-    eta_list=[1000],
+    eta_list=[0.1, 1, 10, 100, 1000],
     model=model,
     node2id=node2id_w,
     deprecated=deprecated

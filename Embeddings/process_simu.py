@@ -3,7 +3,7 @@ import pandas as pd
 import subprocess
 import sys
 
-n_replicats = 5  # Nombre de simulations
+n_replicats = 3  # Nombre de simulations
 result_dir = "simuls"
 #python_path = r"C:\Users\Jules\AppData\Local\Programs\Python\Python312\python.exe"
 python_path = sys.executable
@@ -12,9 +12,9 @@ python_path = sys.executable
 os.makedirs(result_dir, exist_ok=True)
 
 if os.path.exists("simuls/results_to_r.csv"):
-    os.remove("results/results_to_r.csv")
+    os.remove("simuls/results_to_r.csv")
 if os.path.exists("simuls/simu_brut.csv.gz"):
-    os.remove("results/simu_brut.csv.gz")
+    os.remove("simuls/simu_brut.csv.gz")
 
 for k in range(n_replicats):
     if os.path.exists(f"simuls/results_{k+1}.csv"):
@@ -43,12 +43,12 @@ for i in range(n_replicats):
     os.rename("simuls/truth.csv", truth_file)
     
     # Supprimer le fichier volumineux de base
-    os.remove("results/simu_brut.csv.gz")
+    os.remove("simuls/simu_brut.csv.gz")
     #os.remove("data/simuls/target.csv")
 
 
 # Étape 3 : Calcul de la moyenne des réplicats 
-df_list = [pd.read_csv(f'results/results_{f+1}.csv') for f in range(n_replicats)]
+df_list = [pd.read_csv(f'simuls/results_{f+1}.csv') for f in range(n_replicats)]
 group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex']
 df_mean = pd.concat(df_list).groupby(group_cols, as_index=False).mean()
 
