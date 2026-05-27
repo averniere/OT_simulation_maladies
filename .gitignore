@@ -6,4 +6,5 @@ Embeddings/checkpoints
 *.pkl
 *.json
 *.npy
+*.csv.gz
 cache/

@@ -394,8 +394,10 @@ def process_simulation(
     model,
     node2id,
     deprecated,
-    weights=None,
-    method=None
+    cost_method=None,
+    weights_cost=None,
+    weights_simi=None,
+    simi_method=None
     ):
 
     #global_result = pd.DataFrame()
@@ -419,9 +421,11 @@ def process_simulation(
                 # Créer la matrice de similarité S
                 df_simi = df_truth.copy()
                 # similarity = similarity_matrix(df_simi, mendelian_list)
+                print("Compute similarity matrix...")
                 similarity = similarity_by_hpo(
                     df_simi, mendelian_list, source_data_filtre.copy(), 
-                    weights=weights, method=method)
+                    weights=weights_simi, method=simi_method)
+                print("Done !")
                 source_data_filtre = source_data_filtre.reindex(similarity[1])
 
                 complementary_matrices = {
@@ -445,7 +449,12 @@ def process_simulation(
                     print("Source data filtré")
                     print(source_data_filtre.shape)
                     print(noisy_matrix.shape)
-                    cost_matrix = compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
+                    if cost_method == 'wasserstein':
+                        cost_matrix = compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
+                    elif cost_method == 'pseudo hamm':
+                        cost_matrix = cost_matrix_hamm(source_data_filtre, noisy_matrix, weights_cost)
+                    elif cost_method == 'pseudo hamm embed':
+                        cost_matrix = compute_cost_matrix_pseudo_jacc(source_data_filtre, noisy_matrix, node2id, model)
                     print("Cost matrix :", cost_matrix.shape)
                     print(f"Mean = {np.mean(cost_matrix)}")
                     print(f"Min = {np.min(cost_matrix)}")
@@ -536,6 +545,8 @@ for hp_id, parents in zip(hp_ids, parents_list):
 
 objects_w = list(G_hpo_work.nodes())
 node2id_w = {n: i for i, n in enumerate(objects_w)}
+root = "HP:0000001"
+depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
 
 
 def read_hpoa(path):
@@ -590,17 +601,19 @@ results, df_truth, df_target = process_simulation(
     source_data=profils_omim[hpo_cols0],
     n_complex_list=[50],               
     n_match_list=[25],  # [10 , 50],              
-    noise_levels=[0],  # [0, 0.05, 0.1, 0.2],   
+    noise_levels=[0, 0.1, 0.2],  # [0, 0.05, 0.1, 0.2],   
     quantiles=list(np.arange(0.95, 0.999, 0.003)),
     epsilon=0.1,
     overlap_test=[0, 0.5],    
     group_size=10,                     
-    eta_list=[1, 10, 100, 1000],
+    eta_list=[1000, 1e5, 1e6],
     model=model,
     node2id=node2id_w,
     deprecated=deprecated,
-    weights=None,
-    method=None,
+    cost_method='pseudo hamm embed',  # 'wasserstein' ou 'pseudo hamm' ou 'pseudo hamm embed'
+    weights_cost=depths,
+    weights_simi=ic,
+    simi_method='weighted jaccard',  # 'cosine' ou 'weighted jaccard'
 )
 
 results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")

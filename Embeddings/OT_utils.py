@@ -44,14 +44,14 @@ def emb_norms(df_omim, df_orpha, node2id_w, model, manifold=PoincareManifold()):
 
 
 def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_size=256):
+    """Hamming en pondérant par les embeddings."""
     n = df_omim.shape[0]
     m = df_orpha.shape[0]
     C = np.zeros((n, m))
     print("Compute norms")
     norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, model)
     print("Norms computed !")
-    print(all_hpo)
-
+    
     omim_matrix = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
     orpha_matrix = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
     for i_start in tqdm(range(0, n, block_size)):
@@ -235,6 +235,26 @@ def compute_costs_matrix_wasserstein3(df_omim, df_orpha, node2id_w, model, depre
     return C
 
 
+def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
+    n = df_omim.shape[0]
+    m = df_orpha.shape[0]
+    C = np.zeros((n, m))
+
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+    all_hpo = list(hpo_cols)
+    weights_vector = np.array([weights.get(hp, 0.0) for hp in all_hpo])
+
+    omim_matrix = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
+    orpha_matrix = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
+    
+    for i_start in tqdm(range(0, n, block_size)):
+        i_end = min(i_start + block_size, n)
+        block = omim_matrix[i_start:i_end]
+        diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
+        C[i_start:i_end] = (diff * weights_vector).sum(axis=2)
+    return C
+
+    
 def compute_transport(
     C: np.ndarray,
     a: np.ndarray,
