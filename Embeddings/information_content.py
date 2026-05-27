@@ -1,3 +1,4 @@
+import numpy as np
 from collections import defaultdict
 
 
@@ -59,3 +60,33 @@ def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
                     all_diseases[ancestor].add(id)
     total = sum(weights.values())
     return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+
+
+def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):
+    """
+    Calcule la similarité entre chaque terme HPO selon l'article de Resnik. Calculer la similarité
+    entre deux termes revient à prendre le maximum de l'information content parmi tous les parents
+    communs.
+    """
+    colnames = [c for c in df.columns if c.startswith('HP:')]
+    n = len(colnames)
+    sim = np.zeros((n, n))
+    print("Precomputing ancestors...")
+    ancestors = {t: get_ancestors0(G_hpo, t) | {t} for t in colnames}
+    print("Finished !")
+    for i, term_i in enumerate(colnames):
+        for j, term_j in enumerate(colnames):
+            if j < i:
+                sim[i, j] = sim[j, i]
+                continue
+            if i == j:
+                sim[i, j] = ic.get(term_i, 0.0)
+                continue
+            common_ancestors = ancestors[term_i] & ancestors[term_j]
+            if not common_ancestors:
+                sim[i, j] = 0.0
+            else:
+                sim[i, j] = max(ic.get(c, 0.0) for c in common_ancestors)
+    return sim
+
+

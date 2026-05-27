@@ -8,14 +8,23 @@ import re
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
+from scipy.spatial.distance import cdist
 from poincare import PoincareManifold
 from model import Distance_PE
-from information_content import deprecated
+from information_content import deprecated, compute_information_content
 from data_utils import *
 from OT_utils import *
 
 
 def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overlap_rate):
+    """
+    Inputs:
+        - df_mendelien : dataframe contenant les maladies mendéliennes selon leur représentation HPO.
+        - nb_complex : nombre de maladies complexes à simuler.
+        - nb_per_complex : nombre de maladies mendélienne utilisées par maladie complexe.
+        - group_size : nombre de maladies complexes par groupe, ie partageant des termes HPO.
+        - overlap_rate : 
+    """
 
     # Liste des noms des maladies complexes
     complex_names = []
@@ -39,6 +48,7 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
 
     # On traite les complexes groupe par groupe
     for group in groups:
+        # Calcul du nombre de maladies mendéliennes nécessaires pour un groupe de maladies complexes
         total_slots = group_size * nb_per_complex              # nombre total de slots dans le groupe
         nb_shared_slots = int(overlap_rate * total_slots)      # slots occupés par des mendéliennes partagées
         nb_shared_mendelian = nb_shared_slots // 2             # chaque mendélienne partagée occupe 2 slots
@@ -254,7 +264,53 @@ def similarity_matrix(df, mendelian_list):
         matrice_binaire[i, i] = 1.0
     return (matrice_binaire, maladies_mendeliennes_totale)
 
-# Random S
+
+def similarity_by_hpo(df, mendelian_list, source_data, weights=None, method=None):
+    '''
+    Input : 
+        - source_data : dataframe avec les maladies mendéliennes, source_data_filtre ou source_data
+        - weights : IC de la forme -log(p(c))
+        - method : si weights n'est pas None, soit 'cosine', soit 'weighted jaccard'.
+    Output : 
+        - matrice de similarités entre maladies : deux maladies sont similaires si elles partagent
+        un certain nombre de termes HPO en commun (idéalement, il faudrait pondérer par l'information
+        content).
+    ''' 
+    maladies_mendeliennes_df = set()
+    for sublist in df['Mendelian_Sources'].str.split(','):   # pour chaque ligne, on split par virgule
+        for m in sublist:                                    # pour chaque mendélienne dans la liste
+            maladies_mendeliennes_df.add(int(m.strip()))
+    maladies_mendeliennes_totale = list(sorted(
+        maladies_mendeliennes_df.union({int(m) for m in mendelian_list})))  # Ajouter des maladies supplémentaires
+    source_data = source_data.reindex(maladies_mendeliennes_totale)
+
+    if weights is None:
+        # On calcule la matrice de similarités par les coefficients de Jaccard
+        X = source_data.to_numpy().astype(bool)
+        intersection = X @ X.T
+        active = np.sum(X, axis=1)
+        union = active[:, None] + active[None, :] - intersection  # (a+b)+(a+c)-a
+        similarity = np.where(union > 0, intersection / union, 0.0)  # Jaccard coefficient
+    else: 
+        if method == 'cosine':  # Cosine
+            hpo_cols = source_data.columns
+            X = source_data.to_numpy().astype(float)
+            weight0 = np.array([weights.get(h, 0.0) for h in hpo_cols])
+            X0 = X * weight0
+            norms = np.linalg.norm(X0, axis=1, keepdims=True)
+            norms = np.where(norms == 0, 1, norms)
+            X_norm = X0 / norms
+            similarity = X_norm @ X_norm.T
+        if method == 'weighted jaccard':
+            hpo_cols = source_data.columns
+            X = source_data.to_numpy().astype(bool)
+            weight0 = np.array([weights.get(h, 0.0) for h in hpo_cols])
+            distance_matrix = cdist(X, X, metric='jaccard', w=weight0)
+            similarity = 1 - distance_matrix
+    return (similarity, maladies_mendeliennes_totale)
+
+
+# Random S : A MODIFIER
 def dissimilarity_matrix(similarity):
     #Compter le nombre total de 1
     num_ones = int(np.sum(similarity))
@@ -337,7 +393,9 @@ def process_simulation(
     eta_list,
     model,
     node2id,
-    deprecated
+    deprecated,
+    weights=None,
+    method=None
     ):
 
     #global_result = pd.DataFrame()
@@ -360,7 +418,10 @@ def process_simulation(
 
                 # Créer la matrice de similarité S
                 df_simi = df_truth.copy()
-                similarity = similarity_matrix(df_simi, mendelian_list)
+                # similarity = similarity_matrix(df_simi, mendelian_list)
+                similarity = similarity_by_hpo(
+                    df_simi, mendelian_list, source_data_filtre.copy(), 
+                    weights=weights, method=method)
                 source_data_filtre = source_data_filtre.reindex(similarity[1])
 
                 complementary_matrices = {
@@ -508,6 +569,8 @@ hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
 profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
 hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
+weights, diseases, all_diseases = compute_information_content(profils_omim, G_hpo_work)
+ic = {t: -np.log(weights[t]) if weights.get(t, 0) > 0 else 0.0 for t in weights}
 
 checkpoint = torch.load('logs/2026_5_7/12/model_final.pt', map_location='cpu', weights_only=False)
 objects = checkpoint['objects']
@@ -532,10 +595,12 @@ results, df_truth, df_target = process_simulation(
     epsilon=0.1,
     overlap_test=[0, 0.5],    
     group_size=10,                     
-    eta_list=[0.1, 1, 10, 100, 1000],
+    eta_list=[1, 10, 100, 1000],
     model=model,
     node2id=node2id_w,
-    deprecated=deprecated
+    deprecated=deprecated,
+    weights=None,
+    method=None,
 )
 
 results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
