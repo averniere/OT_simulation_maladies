@@ -14,6 +14,7 @@ from model import Distance_PE
 from information_content import deprecated, compute_information_content
 from data_utils import *
 from OT_utils import *
+from frlc0 import *
 
 
 def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overlap_rate):
@@ -397,7 +398,8 @@ def process_simulation(
     cost_method=None,
     weights_cost=None,
     weights_simi=None,
-    simi_method=None
+    simi_method=None,
+    transp_method=None,
     ):
 
     #global_result = pd.DataFrame()
@@ -476,7 +478,15 @@ def process_simulation(
                     print("Compute transport...")
                     epsilon0 = epsilon*np.mean(cost_matrix)
                     print("Regularization, epsilon : ", epsilon0)
-                    ot_plan, ot_cost = compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
+                    if transp_method == 'classic':
+                        ot_plan, ot_cost = compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
+                    elif transp_method == 'frlc':
+                        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                        cost_matrix_torch = torch.tensor(cost_matrix, dtype=torch.float64).to(device)
+                        gamma = 70
+                        print(f'Gamma: {gamma}')
+                        ot_plan_torch, err = FRLC_opt(cost_matrix_torch, None, None, None, None, 50, 50, gamma)
+                        ot_plan = ot_plan_torch.detach().cpu().numpy()
                     print("Finished !")
                     transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
                     OT_type = "OT"
@@ -606,14 +616,15 @@ results, df_truth, df_target = process_simulation(
     epsilon=0.1,
     overlap_test=[0, 0.5],    
     group_size=10,                     
-    eta_list=[1000, 1e5, 1e6],
+    eta_list=[1e5, 1e6],
     model=model,
     node2id=node2id_w,
     deprecated=deprecated,
-    cost_method='pseudo hamm embed',  # 'wasserstein' ou 'pseudo hamm' ou 'pseudo hamm embed'
+    cost_method='wasserstein',  # 'wasserstein' ou 'pseudo hamm' ou 'pseudo hamm embed'
     weights_cost=depths,
-    weights_simi=ic,
-    simi_method='weighted jaccard',  # 'cosine' ou 'weighted jaccard'
+    weights_simi=None,
+    simi_method=None,  # 'cosine' ou 'weighted jaccard'
+    transp_method='frlc'  # 'classic' ou 'frlc'
 )
 
 results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
