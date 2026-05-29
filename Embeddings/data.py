@@ -1,25 +1,72 @@
-import os
-import ast
 import pandas as pd
 import networkx as nx
+import re
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-data_path = os.path.join(current_dir, "..", "data", "HPOs.csv")
+from data_utils import build_disease_correspondence
 
-df_hpo = pd.read_csv(data_path, sep=";")
-df_hpo = df_hpo.drop(columns = ["definition", "synonyms"])
-# df_hpo['parents'] = df_hpo['parents'].apply(ast.literal_eval)
-df_hpo['hp_id'] = df_hpo['hp_id'].str.strip("'\"")
-df_hpo['parents'] = df_hpo['parents'].apply(
-    lambda lst: [p.strip("'\"") for p in ast.literal_eval(lst)] 
-    if isinstance(lst, str) else [p.strip("'\"") for p in lst])
+hp_ids = []
+parents_list = []
 
-G_hpo = nx.DiGraph()
+with open("../data/HPOs.csv", "r") as f:
+    next(f)
+    for line in f:
+        hp_id = line.split(';')[0]
+        
+        # Extraire uniquement la liste contenant des IDs HP:XXXXXXX
+        match = re.search(r"\[([^\]]*'HP:\d{7}'[^\]]*)\]", line)
+        if match:
+            parents = re.findall(r"HP:\d{7}", match.group(0))
+        else:
+            parents = []
+        
+        hp_ids.append(hp_id)
+        parents_list.append(parents)
 
-for i, row in df_hpo.iterrows():
-    G_hpo.add_node(row['hp_id'])
+df_hpo = pd.DataFrame({'hp_id': hp_ids, 'parents': parents_list})
 
-for j, row in df_hpo.iterrows():
-    for parent_id in row["parents"]:
-        if parent_id in G_hpo:
-            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre
+G_hpo_work = nx.DiGraph()
+for hp_id in hp_ids:
+    G_hpo_work.add_node(hp_id)
+for hp_id, parents in zip(hp_ids, parents_list):
+    for parent_id in parents:
+        if parent_id in G_hpo_work:
+            G_hpo_work.add_edge(hp_id, parent_id)
+
+G_hpo_work.add_edge('HP:0430046', 'HP:0001382')  # Missing edge
+objects_w = list(G_hpo_work.nodes())
+node2id_w = {n: i for i, n in enumerate(objects_w)}
+root = "HP:0000001"
+depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
+
+
+def read_hpoa(path):
+    with open(path, 'r') as f:
+        skip = sum(1 for line in f if line.startswith('#'))
+    return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
+
+
+df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa')
+df_hpoa['disease_name'] = df_hpoa['disease_name'].str.lower().str.strip().str.replace(r'[\s\-]+', ' ', regex=True)
+df_hpoa.tail()
+
+correspondence_exacte = build_disease_correspondence(df_hpoa)
+print(f"Correspondances trouvées : {len(correspondence_exacte)}")
+
+# Construction de deux dataframes à partir de df_hpoa
+df_pivot = df_hpoa[['database_id', 'hpo_id']].drop_duplicates()
+df_pivot['values']=1.
+df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', columns='hpo_id', aggfunc='max', fill_value=0)
+df_pivot.columns.name = None
+df_pivot = df_pivot.reset_index()
+
+df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
+df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
+
+df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
+df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
+
+hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+
+profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
+profils_omim = profils_omim.reset_index()
+hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
