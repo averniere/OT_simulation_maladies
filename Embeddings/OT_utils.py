@@ -3,6 +3,7 @@ import ot
 import numpy as np
 from ot import sinkhorn
 from tqdm import tqdm
+from scipy.spatial.distance import cdist
 from joblib import Parallel, delayed
 from poincare import PoincareManifold
 from data_utils import f_active_terms
@@ -52,16 +53,20 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
     norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, model)
     print("Norms computed !")
     
-    omim_matrix = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
-    orpha_matrix = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
-    for i_start in tqdm(range(0, n, block_size)):
-        i_end = min(i_start + block_size, n)
-        block = omim_matrix[i_start:i_end]
-        diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
-        C[i_start:i_end] = (diff * norms).sum(axis=2)
+    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
+    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
+    #for i_start in tqdm(range(0, n, block_size)):
+        #i_end = min(i_start + block_size, n)
+        #block = omim_matrix[i_start:i_end]
+        #diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
+        #C[i_start:i_end] = (diff * norms).sum(axis=2)
+    Aw = A * norms
+    Bw = B * norms
+
+    C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
     # Check
     for i, j in [(0, 0), (3, 7), (9, 14)]:
-        ref = np.dot(np.abs(omim_matrix[i, :] - orpha_matrix[j, :]), norms)
+        ref = np.dot(np.abs(A[i, :] - B[j, :]), norms)
         new = C[i, j]
         print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
     return C
@@ -242,17 +247,37 @@ def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
 
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     all_hpo = list(hpo_cols)
-    weights_vector = np.array([weights.get(hp, 0.0) for hp in all_hpo])
+    w = np.array([weights.get(hp, 0.0) for hp in all_hpo])
 
-    omim_matrix = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
-    orpha_matrix = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
+    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
+    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
     
-    for i_start in tqdm(range(0, n, block_size)):
-        i_end = min(i_start + block_size, n)
-        block = omim_matrix[i_start:i_end]
-        diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
-        C[i_start:i_end] = (diff * weights_vector).sum(axis=2)
+    # for i_start in tqdm(range(0, n, block_size)):
+        # i_end = min(i_start + block_size, n)
+        # block = omim_matrix[i_start:i_end]
+        # diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
+        # C[i_start:i_end] = (diff * weights_vector).sum(axis=2)
+    Aw = A * w
+    Bw = B * w
+    C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
     return C
+
+
+def basic_cost_matrix(df_omim, df_orpha, dist_method):
+    """
+    Inputs:
+        - df_omim, df_orpha : dataframes de maladies source et destination.
+        - dist_method : 'euclidean', 'hamming', 'jaccard' 
+    """
+    n = df_omim.shape[0]
+    m = df_orpha.shape[0]
+
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+    X = df_omim[hpo_cols].to_numpy().astype(float)
+    Y = df_orpha[hpo_cols].to_numpy().astype(float)
+    distance_matrix = cdist(X, Y, metric=dist_method)
+    print("Check :", distance_matrix.shape)
+    return distance_matrix
 
     
 def compute_transport(
