@@ -2,7 +2,7 @@ import pandas as pd
 import networkx as nx
 import re
 
-from data_utils import build_disease_correspondence
+from data_utils import build_disease_correspondence, find_gene_correspondence
 
 hp_ids = []
 parents_list = []
@@ -70,3 +70,25 @@ hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
 profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
 hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
+
+# Associations gène-maladie et PPI
+genes_to_disease = pd.read_csv("../data/genes_to_disease.txt", sep="\t")
+genes_to_disease = genes_to_disease.drop(columns='source')
+
+ppi = pd.read_csv("https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", sep="," )
+
+doc = pd.read_csv("https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz", sep="\t")
+doc = doc.rename(columns={"preferred_name":"gene_symbol"})
+doc = doc.drop(columns="protein_size")
+
+# Base de données de correspondances OMIM-ORPHA en fonction du gène indiqué
+df_gene_correspondence = find_gene_correspondence(genes_to_disease, 'disease_id', 'gene_symbol')
+df_gene_correspondence0 = df_gene_correspondence.loc[df_gene_correspondence['orpha_id'].isin(df_hpoa['database_id'])]
+
+list_omim = df_gene_correspondence0['omim_id'].unique()
+list_orpha = df_gene_correspondence0['orpha_id'].unique()
+
+gene_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
+gene_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
+print("gene_omim : ", gene_omim.shape)
+print("gene_orpha : ", gene_orpha.shape)

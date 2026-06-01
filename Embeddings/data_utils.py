@@ -111,6 +111,19 @@ def build_fuzzy_correspondence(df, threshold=0.85):
     return df_corr
 
 
+def find_gene_correspondence(df, disease_col, gene_col):
+    gene_sets = df.groupby(disease_col)[gene_col].apply(set)
+    omim_sets = gene_sets[gene_sets.index.str.startswith("OMIM")]
+    orpha_sets = gene_sets[gene_sets.index.str.startswith("ORPHA")]
+    matches = []
+    for omim_id, omim_genes in omim_sets.items():
+        for orpha_id, orpha_genes in orpha_sets.items():
+            if omim_genes == orpha_genes:
+                matches.append({"omim_id": omim_id, "orpha_id": orpha_id, "genes": ", ".join(omim_genes)})
+    
+    return pd.DataFrame(matches)
+
+    
 def compare_barycenters(profils_uniform, profils_weighted, model, node2id, deprecated, weights, disease_id=3):
     model.eval()
     W = model.weight.detach().cpu().numpy()
