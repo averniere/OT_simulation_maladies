@@ -128,6 +128,16 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
 
 # Regularized Optimal transport
 def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=100, stopThr=1e-9, numInnerItermax=100000,stopInnerThr=1e-9, log=False, verbose=False):
+    """
+    Inputs :
+        - a, b : pondérations de l'information des points sources et destinations à transporter.
+        - xs : données sources.
+        - xt : données destinations.
+        - M : matrice de coûts.
+        - S : matrice de similarité.
+        - epsilon : régularisation entropique.
+        - eta : deuxième régularisation (laplacienne)
+    """
 
     #Convertir les entrées en tableaux numpy
     a = np.asarray(a, dtype=np.float64)

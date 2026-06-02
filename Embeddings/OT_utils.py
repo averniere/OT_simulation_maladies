@@ -1,7 +1,9 @@
 import torch
 import ot
 import numpy as np
+from scipy.sparse import csgraph
 from ot import sinkhorn
+from ot.optim import gcg
 from tqdm import tqdm
 from scipy.spatial.distance import cdist
 from joblib import Parallel, delayed
@@ -375,3 +377,56 @@ def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
     ax[1].set_ylabel(r'$ 100 \cdot \frac{\langle C, P^*_\epsilon \rangle - \langle C, P^* \rangle}{\langle C, P^* \rangle} $', fontsize=25)
     ax[1].tick_params(which='both', size=20)
     ax[1].grid(ls='--') 
+
+
+def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=500, stopThr=1e-9, numInnerItermax=100000,stopInnerThr=1e-9, log=False, verbose=False):
+    """
+    Inputs :
+        - a, b : pondérations de l'information des points sources et destinations à transporter.
+        - xs : données sources.
+        - xt : données destinations.
+        - M : matrice de coûts.
+        - S : matrice de similarité.
+        - epsilon : régularisation entropique.
+        - eta : deuxième régularisation (laplacienne)
+    """
+    n, m = M.shape
+    if a==None:
+        a = np.ones(n)/n
+    if b==None:
+        b = np.ones(m)/m
+
+    #Convertir les entrées en tableaux numpy
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    xs = np.asarray(xs, dtype=np.float64)  # pas forcément utilisé ici
+    xt = np.asarray(xt, dtype=np.float64)  # pas forcément utilisé ici
+    M = np.asarray(M, dtype=np.float64)
+    S = np.asarray(S, dtype=np.float64)
+
+    # Calcul du Laplacien (non normé) à partir de la matrice de similarité S
+    lS = csgraph.laplacian(S, normed=False)
+    lS_sym = 0.5 * (lS + lS.T)  # on le symétrise pour éviter tout problème numérique
+
+    def f(G):
+        """
+        Calcule la partie "Laplacien" du coût
+        sans multiplier par reg2 (le GCG s'en charge).
+        """
+        # Terme Laplacien
+        val_lap = (lS_sym@G)*G
+        # si on considere similarité dans la cible egalement avec un param alphe ici = 0.5
+        # val_lap = 0.5 * np.trace(G.T.dot(lS2).dot(G)) + 0.5 * np.trace(G.dot(lc2).dot(G.T))
+        return val_lap.sum()
+
+    def df(G):
+        """
+        Gradient de f_lap(G).
+        """
+        #si on considere similarité dans la cible egalement avec un param alphe ici = 0.5
+        #return (ls2 @ G) + (G @ Lc2)
+        # Gradient partie laplacienne  2 *  (ls2 @ G)
+        return  2 * (lS_sym @ G)
+
+    # Résolution du problème d'optimisation avec l'algorithme du gcg
+    return gcg(a, b, M, reg1=epsilon, reg2=eta, f=f, df=df, G0=None, numItermax=numItermax, numItermaxEmd=numInnerItermax, stopThr=stopThr, stopThr2=stopInnerThr,verbose=verbose)
