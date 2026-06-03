@@ -68,7 +68,7 @@ def build_disease_correspondence(df):
     })[['disease_name', 'omim_id', 'orpha_id']]
 
 
-def build_fuzzy_correspondence(df, threshold=0.85):
+def build_fuzzy_correspondence(df, threshold=0.95):
     omim = df[df['database_id'].str.startswith('OMIM:')][['disease_name', 'database_id']].drop_duplicates()
     orpha = df[df['database_id'].str.startswith('ORPHA:')][['disease_name', 'database_id']].drop_duplicates()
 

@@ -1,5 +1,6 @@
 import pandas as pd
 import networkx as nx
+import requests, xml.etree.ElementTree as ET
 import re
 
 from data_utils import build_disease_correspondence, find_gene_correspondence
@@ -81,7 +82,15 @@ doc = pd.read_csv("https://stringdb-downloads.org/download/protein.info.v12.0/96
 doc = doc.rename(columns={"preferred_name":"gene_symbol"})
 doc = doc.drop(columns="protein_size")
 
-# Base de données de correspondances OMIM-ORPHA en fonction du gène indiqué
+df0 = pd.merge(genes_to_disease, doc, how='left', on='gene_symbol')
+df1 = pd.merge(df0, ppi, how='left', left_on="#string_protein_id", right_on="protein1")
+df1 = df1.drop(columns="protein1")
+
+'''
+# ======================================================================================
+# ===== Base de données de correspondances OMIM-ORPHA en fonction du gène indiqué ======
+# ======================================================================================
+
 df_gene_correspondence = find_gene_correspondence(genes_to_disease, 'disease_id', 'gene_symbol')
 df_gene_correspondence0 = df_gene_correspondence.loc[df_gene_correspondence['orpha_id'].isin(df_hpoa['database_id'])]
 
@@ -119,3 +128,54 @@ df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
     combined_score=("combined_score", list)
 )
 print(f"df1_omim : {df1_omim.shape}\n df1_orpha : {df1_orpha.shape}")
+'''
+
+# ======================================================================================
+# ================== Correspondances issues d'Orphadata ================================
+# ======================================================================================
+
+url = "https://www.orphadata.com/data/xml/en_product1.xml"
+response = requests.get(url)
+response.raise_for_status()
+tree = ET.fromstring(response.content)
+rows = []
+for disorder in tree.iter("Disorder"):
+    orpha_id = "ORPHA:" + disorder.findtext("OrphaCode")
+    for ref in disorder.iter("ExternalReference"):
+        if ref.findtext("Source") == "OMIM":
+            rows.append({
+                "orpha_id": orpha_id,
+                "omim_id":  "OMIM:" + ref.findtext("Reference"),
+                "mapping_type": ref.findtext("DisorderMappingRelation/Name")
+            })
+
+df_orpha_omim = pd.DataFrame(rows)
+
+list_omim = df_orpha_omim['omim_id'].unique()
+list_orpha = df_orpha_omim['orpha_id'].unique()
+
+work_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
+work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
+
+df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
+df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
+
+df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
+    ncbi_gene_id=("ncbi_gene_id", "first"),
+    gene_symbol=("gene_symbol", "first"),
+    association_type=("association_type", "first"),
+    protein=("#string_protein_id", "first"),
+    annotation=("annotation", "first"),
+    protein2=("protein2", list),
+    combined_score=("combined_score", list)
+)
+
+df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
+    ncbi_gene_id=("ncbi_gene_id", "first"),
+    gene_symbol=("gene_symbol", "first"),
+    association_type=("association_type", "first"),
+    protein=("#string_protein_id", "first"),
+    annotation=("annotation", "first"),
+    protein2=("protein2", list),
+    combined_score=("combined_score", list)
+)
