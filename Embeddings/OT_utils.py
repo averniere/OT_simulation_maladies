@@ -1,11 +1,13 @@
 import torch
 import ot
 import numpy as np
+import time
 from scipy.sparse import csgraph
 from ot import sinkhorn
 from ot.optim import gcg
 from tqdm import tqdm
-from scipy.spatial.distance import cdist
+from scipy.sparse import csr_matrix
+from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
 from poincare import PoincareManifold
 from data_utils import f_active_terms
@@ -113,23 +115,32 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     model.eval()
     W = model.weight.detach().cpu().numpy()
-    print("Precompute...")
 
+    print("Precompute...")
     def precompute(df):
         '''
         Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
         le vecteur de poids uniformes associés.
         '''
-        terms, weights = [], []
-        for _, row in df.iterrows():
-            active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
-            terms.append(active)
-            weights.append(np.ones(len(active)) / len(active) if active else np.array([]))
-        return terms, weights  
+        #terms, weights = [], []
+        #for _, row in df.iterrows():
+            #active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
+            #terms.append(active)
+            #weights.append(np.ones(len(active)) / len(active) if active else np.array([]))
+        X = df[hpo_cols].to_numpy(dtype=bool)
+        resolved_cols = np.array(
+            [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
+            dtype=object)
+        valid_mask = resolved_cols != None
+        X_valid = X[:, valid_mask]
+        resolved_valid = resolved_cols[valid_mask]
+        terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
+        weights = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
+        return terms, weights
 
-    print("Finished !")
     terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
     terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
+    print("Finished !")
 
     all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
     term2idx = {h: k for k, h in enumerate(all_terms)}
@@ -152,11 +163,10 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
             return i, np.zeros(len(terms_j))
         # Ei = E[idx_i[i]]
         row = np.zeros(len(terms_j))
-        for j in range(len(terms_j)):
-            if not idx_j[j]:
-                continue
+        valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
+        for j in valid_js:
             # Ej = E[idx_j[j]]
-            # M  = cost_hpos(Ei, Ej) 
+            # M = cost_hpos(Ei, Ej) 
             M = D_full[np.ix_(idx_i[i], idx_j[j])]
             _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
         return i, row
@@ -271,13 +281,10 @@ def basic_cost_matrix(df_omim, df_orpha, dist_method):
         - df_omim, df_orpha : dataframes de maladies source et destination.
         - dist_method : 'euclidean', 'hamming', 'jaccard' 
     """
-    n = df_omim.shape[0]
-    m = df_orpha.shape[0]
-
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     X = df_omim[hpo_cols].to_numpy().astype(float)
     Y = df_orpha[hpo_cols].to_numpy().astype(float)
-    distance_matrix = cdist(X, Y, metric=dist_method)
+    distance_matrix = pairwise_distances(X, Y, metric=dist_method, n_jobs=-1)
     print("Check :", distance_matrix.shape)
     return distance_matrix
 
@@ -292,11 +299,8 @@ def compute_transport(
         a = np.ones(n)/n
     if b is None:
         b = np.ones(m)/m
-    optimal_plan = ot.emd(a, b, C)
+    optimal_plan = ot.emd(a, b, C, numItermax=10e6)
     optimal_cost = np.sum(optimal_plan*C)
-    # print(f"optimal transport plan: \n{optimal_plan}")
-    # print(f"Cost matrix: \n{C}")
-    # print(f"transport cost: {optimal_cost}")
     return optimal_plan, optimal_cost
 
 
@@ -305,7 +309,7 @@ def compute_transport_sinkhorn(
     a: np.ndarray,
     b: np.ndarray,
     epsilon: float,
-    max_iters: int = 10_000,
+    max_iters: int = 100000,
     tau: float = 1e-4,
     verbose: bool = False,
     ):
@@ -315,6 +319,8 @@ def compute_transport_sinkhorn(
         a = np.ones(n)/n
     if b is None:
         b = np.ones(m)/m
+    assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
+    assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
     optimal_plan_sinkhorn = sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
@@ -352,10 +358,10 @@ def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
         for k in top_k:
             if rank <= k:
                 results[k] += 1
-                if (i, j_true) not in pairs.keys():
+                if C is not None and (i, j_true) not in pairs.keys():
                     pairs[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal[i]]
                     
-        if (i, j_true) not in pairs.keys():
+        if C is not None and (i, j_true) not in pairs.keys():
             pairs[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal[i]]
             
     n = len(gt_set)

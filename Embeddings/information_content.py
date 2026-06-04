@@ -1,5 +1,6 @@
 import numpy as np
 from collections import defaultdict
+from tqdm import tqdm
 
 
 deprecated={
@@ -74,7 +75,7 @@ def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):
     print("Precomputing ancestors...")
     ancestors = {t: get_ancestors0(G_hpo, t) | {t} for t in colnames}
     print("Finished !")
-    for i, term_i in enumerate(colnames):
+    for i, term_i in tqdm(enumerate(colnames)):
         for j, term_j in enumerate(colnames):
             if j < i:
                 sim[i, j] = sim[j, i]

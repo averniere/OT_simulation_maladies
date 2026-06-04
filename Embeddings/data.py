@@ -162,20 +162,26 @@ df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_o
 
 df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
     ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", "first"),
+    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
     association_type=("association_type", "first"),
-    protein=("#string_protein_id", "first"),
+    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
     annotation=("annotation", "first"),
     protein2=("protein2", list),
     combined_score=("combined_score", list)
 )
+df1_omim['n_proteins'] = df1_omim['protein'].apply(
+    lambda x: len(set(x)) if isinstance(x, list) else 1
+)
 
 df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
     ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", "first"),
+    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
     association_type=("association_type", "first"),
-    protein=("#string_protein_id", "first"),
+    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
     annotation=("annotation", "first"),
     protein2=("protein2", list),
     combined_score=("combined_score", list)
+)
+df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
+    lambda x: len(set(x)) if isinstance(x, list) else 1
 )
