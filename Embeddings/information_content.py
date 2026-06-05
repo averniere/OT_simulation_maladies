@@ -39,6 +39,9 @@ def get_ancestors0(G, node):
 
 def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
     colnames = [c for c in df_omim.columns if c.startswith('HP:')]
+    hp_matrix = df_omim[colnames].values
+    ids = df_omim.index.tolist()
+
     weights = defaultdict(float)
     diseases = defaultdict(set)
     all_diseases = defaultdict(set)
@@ -49,6 +52,24 @@ def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
             ancestors[term]=get_ancestors0(G_hpo, term)
         return ancestors[term]
 
+    row_idxs, col_idxs = np.where(hp_matrix == 1)
+    for row_idx, col_idx in zip(row_idxs, col_idxs):
+        disease_id = ids[row_idx]
+        term = colnames[col_idx]
+        resolved = deprecated.get(term, term)
+        
+        weights[resolved] += 1
+        diseases[resolved].add(disease_id)
+        all_diseases[resolved].add(disease_id)
+        
+        for ancestor in get_ancestors(resolved):
+            weights[ancestor] += 1
+            all_diseases[ancestor].add(disease_id)
+
+    total = sum(weights.values())
+    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+
+    '''
     for id, row in df_omim.iterrows():
         for term in colnames:
             if row[term]==1:
@@ -61,6 +82,7 @@ def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
                     all_diseases[ancestor].add(id)
     total = sum(weights.values())
     return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+'''
 
 
 def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):

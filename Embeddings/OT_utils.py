@@ -284,7 +284,15 @@ def basic_cost_matrix(df_omim, df_orpha, dist_method):
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     X = df_omim[hpo_cols].to_numpy().astype(float)
     Y = df_orpha[hpo_cols].to_numpy().astype(float)
-    distance_matrix = pairwise_distances(X, Y, metric=dist_method, n_jobs=-1)
+    if dist_method == 'euclidean':
+        distance_matrix = pairwise_distances(X, Y, metric=dist_method, n_jobs=-1)
+    if dist_method == 'jaccard':
+        inter = X @ Y.T
+        union = X.sum(axis=1)[:, None]+Y.sum(axis=1)[None, :]-inter
+        distance_matrix = 1 - np.where(union == 0, 1.0, inter/union)
+    if dist_method == 'hamming':
+        inter = X @ Y.T
+        distance_matrix = X.sum(axis=1)[:, None]+Y.sum(axis=1)[None, :] - 2*inter
     print("Check :", distance_matrix.shape)
     return distance_matrix
 
