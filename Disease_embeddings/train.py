@@ -1,20 +1,34 @@
 import numpy as np
+import torch
+import os 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from torch.utils.data import TensorDataset, DataLoader
 
 
-def train(model, data, optimizer, args, device, labels=None, earlystop=0.0):
+def train(
+    model, 
+    data, 
+    optimizer, 
+    args, 
+    device, 
+    save_dir, 
+    labels=None, 
+    earlystop=0.0,
+    verbose=True,
+    ):
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        
     loader = DataLoader(data, batch_size=args["batchsize"], shuffle=True)
-
     model = model.to(device)
-    pbar = tqdm(range(args["epochs"]))
-
     n_iter = 0
     losses = []
+    norm_history = []
     earlystop_count = 0
-    for epoch in pbar:
+    for epoch in tqdm(range(args["epochs"])):
         grad_norm = []
 
         # determine learning rate
@@ -40,6 +54,14 @@ def train(model, data, optimizer, args, device, labels=None, earlystop=0.0):
         epoch_loss /= len(loader)
         losses.append(epoch_loss)
 
+        with torch.no_grad():
+            n = model.weight.norm(dim=-1)
+            norm_history.append({
+                'mean': n.mean().item(),
+                'max':  n.max().item(),
+                'min':  n.min().item(),
+            })
+
         if epoch > 10:
             delta = abs(losses[epoch] - losses[epoch-1])            
             if (delta < earlystop):
@@ -48,5 +70,18 @@ def train(model, data, optimizer, args, device, labels=None, earlystop=0.0):
                 break
 
     delta = abs(losses[epoch] - losses[epoch-1])
+
+    if save_dir is not None:
+        final_path = os.path.join(save_dir, "model_final.pt")
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'data': data,
+            'args':args,
+            'losses': losses,
+            'norm_history': norm_history,
+        }, final_path)
+        if verbose:
+            print(f"Modèle final sauvegardé : {final_path}")
+
 
     return model.embeddings.weight.cpu().detach().numpy(), losses, epoch_loss, epoch

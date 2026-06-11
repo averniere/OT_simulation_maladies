@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 import pickle
 import hashlib
+import datetime
 
 from torch.utils.data import TensorDataset
 
@@ -12,6 +13,7 @@ from poincare import PoincareManifold
 from poincare_embeddings import Poincarre_embeddings
 from RSGD import RiemanianSGD
 from train import train
+from load_data import * 
 
 import os
 import os.path
@@ -27,11 +29,53 @@ N_PCA = 0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 
-print("="*10, "Chargement des données", "="*10)
-profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
-profils_omim = profils_omim.reset_index()
-print("")
 
+def get_dir_name(models_dir):
+    """Gets a directory to save the model.
+
+    If the directory already exists, then append a new integer to the end of
+    it. This method is useful so that we don't overwrite existing models
+    when launching new jobs.
+
+    Args:
+        models_dir: The directory where all the models are.
+
+    Returns:
+        The name of a new directory to save the training logs and model weights.
+    """
+    if not os.path.exists(models_dir):
+        save_dir = os.path.join(models_dir, '0')
+        os.makedirs(save_dir)
+    else:
+        existing_dirs = np.array(
+                [d for d in os.listdir(models_dir) if os.path.isdir(os.path.join(models_dir, d))]
+        ).astype(int)
+        if len(existing_dirs) > 0:
+            dir_id = str(existing_dirs.max() + 1)
+        else:
+            dir_id = "1"
+        save_dir = os.path.join(models_dir, dir_id)
+        os.makedirs(save_dir)
+    return save_dir
+
+
+dt = datetime.datetime.now()
+date = f"{dt.year}_{dt.month}_{dt.day}"
+models_dir = os.path.join("logs/", date)
+save_dir = get_dir_name(models_dir)
+
+# Chargement des données
+work = pd.concat(work_omim, work_orpha).reset_index()
+omim_to_idx = {v: i for i, v in enumerate(work['database_id'].values) if v.startswith('OMIM')} 
+orpha_to_idx = {v: i for i, v in enumerate(work['database_id'].values) if v.startswith('ORPHA')}
+correspondances = []
+for _, row in df_orpha_omim.iterrows():
+        if row['omim_id'] in omim_to_idx and row['orpha_id'] in orpha_to_idx:
+            i = omim_to_idx[row['omim_id']]
+            j = orpha_to_idx[row['orpha_id']]
+            correspondances.append((i, j))
+
+# Préparation des données
 print("="*10, "Préparation des données", "="*10)
 x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False, n_pca=N_PCA)
 

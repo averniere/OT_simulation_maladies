@@ -20,7 +20,7 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 		x = np.double(df.values[:, 1:])
 		labels = df.values[:, 0]
 		labels = labels.astype(str)
-		colnames = df.columns[1:]
+		colnames = [c for c in df.columns if c.startswith('HP')]
 	else:
 		x = np.double(df.values)
 		labels = ['unknown'] * np.size(x, 0)
@@ -33,7 +33,6 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 		s = np.std(x, axis=0)
 		s[s == 0] = 1
 		x = (x - np.mean(x, axis=0)) / s
-
 	if n_pca:
 		if n_pca == 1:
 			n_pca = n
@@ -155,7 +154,10 @@ def connect_knn(KNN, distances, n_components, labels):
 	return KNN
 """
 
-def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected=False, sigma=1.0, distlocal='minkowski'):
+def compute_rfa(
+	features, mode='features', k_neighbours=15, sym=False, 
+	connected=False, sigma=1.0, distlocal='minkowski',
+	correspondances=None, use_knn=True, method_knn='closest_both'):
 	"""
 	Computes the target RFA similarity matrix. The RFA matrix of
 	similarities relates to the commute time between pairs of nodes, and it is
@@ -168,16 +170,31 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 		- connected : True si l'on connecte les composantes connexes isolées à l'issu du clustering.
 		- sigma : hyperparamètre qui contrôle l'écart type de la transformation gaussienne des poids.
 		- distlocal : distance utilisée pour calculer les plus proches voisin.
+		- correspondances : array numpy (P, 2) de paires d'indices de maladies identiques.
+		- use_knn : True si l'on construit un kNN en connectant les paires similaires, False on 
+		ne donne le signal de similarité que dans la matrice finale.
 	"""
 	if mode == 'features':
 		KNN_sparse = kneighbors_graph(features, k_neighbours, mode='distance', metric=distlocal, include_self=False, n_jobs=-1)
 		KNN_sparse.data[KNN_sparse.data == 0.0] = 1e-4
-		row = KNN_sparse.getrow(429)
-		print(f"Voisins de 429 : {row.indices}")
-		print(f"Distances : {row.data}")
-
 		KNN = KNN_sparse.toarray()
 
+		if correspondances is not None and use_knn:
+			paired_nodes = set()
+			min_dist = KNN_sparse.data.min() if KNN_sparse.nnz > 0 else 1e-4
+			for (i, j) in correspondances:
+				KNN[i,j]=min_dist
+				KNN[j,i]=min_dist
+				paired_nodes.add(i)
+				paired_nodes.add(j)
+			# On réinitialise le KNN pour les paires concernées
+			paired_idx = np.array(list(paired_nodes))
+			KNN[paired_idx, :] = 0.0
+			KNN[:, paired_idx] = 0.0
+			all_distances = pairwise_distances(features, metric=distlocal, n_jobs=-1)
+			np.fill_diagonal(all_distances, np.inf)
+			print("build_pairs_KNN")
+			KNN = build_pairs_KNN(KNN, all_distances, correspondances, k_neighbours, method_knn)
 		if sym:
 			KNN = np.maximum(KNN, KNN.T)  # Dès qu'un noeud est voisin d'un autre on l'inclue dans le graphe
 		else:
@@ -207,7 +224,6 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 
 	# Diagnostic I
 	n_comp_final, comp_labels = connected_components(KNN, directed=True)
-
 	print(f"Composantes connexes avant shortest_path : {n_comp_final}")
 	print(f"Valeurs non nulles dans KNN : {np.count_nonzero(KNN)}")
 
@@ -217,8 +233,7 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 	print(f"{n_comp_final} composantes :")
 	for rank, comp_id in enumerate(sorted_comp):
 		nodes = np.where(comp_labels == comp_id)[0]
-		print(f"  Composante {rank+1} (id={comp_id}) : {len(nodes)} nœuds → {nodes[:10]}{'...' if len(nodes) > 10 else ''}")
-
+		print(f"Composante {rank+1} (id={comp_id}) : {len(nodes)} nœuds → {nodes[:10]}{'...' if len(nodes) > 10 else ''}")
 	D_high = shortest_path(KNN, method="D", directed=False)
 	print("Nb inf dans D_high :", np.isinf(D_high).sum())
 
@@ -226,8 +241,11 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 		S = np.exp(-KNN / (sigma*features.size(1)))
 	else:
 		S = np.exp(-KNN / sigma)
-
 	S[KNN == 0] = 0
+	if correspondances is not None:
+        for (i, j) in correspondances:
+            S[i, j] = 1.0
+            S[j, i] = 1.0
 	L = csgraph.laplacian(S, normed=False)
 
 	n = L.shape[0]
@@ -235,3 +253,73 @@ def compute_rfa(features, mode='features', k_neighbours=15, sym=False, connected
 	RFA[RFA == np.nan] = 0.0
 
 	return torch.from_numpy(RFA.copy()), D_high
+
+
+def build_pairs_KNN(KNN, distances, correspondances, k_neighbours, method_KNN):
+	"""
+	method_KNN : de la forme 'method_connexion' où method peut prendre les valeurs 'union', 
+	'intersection' ou 'closest', selon la manière dont on compte les voisins des paires de maladies,
+	connexion peut prendre les valeurs 'nearest' ou 'both' selon la manière dont on connecte les voisins
+	aux paires.
+	"""
+	methods_list = {'union', 'intersection', 'closest'}
+	connexions_list = {'nearest', 'both'}
+	parts = method_knn.rsplit('_', 1)
+	method, connexion = parts[0], parts[1]
+
+	def _top_k(node, k, exclude):
+        dists = all_distances[node].copy()
+        for e in exclude:
+            dists[e] = np.inf
+        idx = np.argsort(dists)[:k]
+        return idx, dists[idx]
+
+    for (i, j) in correspondances:
+        exclude = {i, j}
+        if method == 'union':
+            nbrs_i, di = _top_k(i, k_neighbours, exclude)
+            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+            all_nbrs = {n: (di[idx], np.inf) for idx, n in enumerate(nbrs_i)}
+            for idx, n in enumerate(nbrs_j):
+                di_n, _ = all_nbrs.get(n, (np.inf, np.inf))
+                all_nbrs[n] = (di_n, dj[idx])
+
+        elif method == 'intersection':
+            nbrs_i, di = _top_k(i, k_neighbours, exclude)
+            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+            set_i = {n: di[idx] for idx, n in enumerate(nbrs_i)}
+            set_j = {n: dj[idx] for idx, n in enumerate(nbrs_j)}
+            common = set(set_i) & set(set_j)
+            all_nbrs = {n: (set_i[n], set_j[n]) for n in common}
+
+        elif method == 'closest':
+            nbrs_i, di = _top_k(i, k_neighbours, exclude)
+            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+            # Union dédupliquée : distance de l'entité = min(d(n,i), d(n,j))
+            merged = {}
+            for idx, n in enumerate(nbrs_i):  # Voisins de i
+                merged[n] = (di[idx], np.inf)  # (distance à i, distance à j)
+            for idx, n in enumerate(nbrs_j):
+                prev_di, _ = merged.get(n, (np.inf, np.inf))  # Si n déjà parcouru comme voisin de i
+                merged[n] = (prev_di, dj[idx])  # (distance à i, diastance à j)
+            # Trier par min(d_i, d_j) et garder les k meilleurs
+            ranked = sorted(merged.items(), key=lambda x: min(x[1][0], x[1][1]))
+            all_nbrs = dict(ranked[:k_neighbours])
+
+        for n, (di, dj) in all_nbrs.items():  # Voisins retenus et leurs distances à i et j
+            if connection == 'both':  # On connecte à i et j
+                edges = [(i, n, d_to_i), (j, n, d_to_j)]
+            else:  # 'nearest' : on connecte au noeud le plus proche (i ou j)
+                if di <= dj:
+                    edges = [(i, n, di)]
+                else:
+                    edges = [(j, n, dj)]
+
+            for src, tgt, d in edges:
+                if np.isinf(d):
+                    d = all_distances[src, tgt]
+                if KNN[src, tgt] == 0 or d < KNN[src, tgt]:
+                    KNN[src, tgt] = d
+                if KNN[tgt, src] == 0 or d < KNN[tgt, src]:
+                    KNN[tgt, src] = d
+    return KNN
