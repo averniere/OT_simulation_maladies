@@ -1,16 +1,14 @@
 import torch
 import ot
 import numpy as np
-import time
 from scipy.sparse import csgraph
 from ot import sinkhorn
 from ot.optim import gcg
 from tqdm import tqdm
-from scipy.sparse import csr_matrix
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
 from poincare import PoincareManifold
-from data_utils import f_active_terms
+
 
 
 def compute_cost_matrix(omim, orpha):
@@ -69,11 +67,11 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
 
     C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
     # Check
-    for i, j in [(0, 0), (3, 7), (9, 14)]:
-        ref = np.dot(np.abs(A[i, :] - B[j, :]), norms)
-        new = C[i, j]
-        print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
-    return C
+    #for i, j in [(0, 0), (3, 7), (9, 14)]:
+        #ref = np.dot(np.abs(A[i, :] - B[j, :]), norms)
+        #new = C[i, j]
+        #print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
+    #return C
 
 
 def cost_hpos(hpoi, hpoj):
@@ -174,78 +172,6 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     results = Parallel(n_jobs=-1)(
         delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
     )
-    C = np.zeros((len(df_omim), len(df_orpha)))
-    for i, row in results:
-        C[i] = row
-    return C
-
-
-def compute_costs_matrix_wasserstein3(df_omim, df_orpha, node2id_w, model, deprecated):
-    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
-    model.eval()
-    W = model.weight.detach().cpu().numpy()
-
-    def precompute(df):
-        terms, weights = [], []
-        for _, row in df.iterrows():
-            active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
-            w = np.ones(len(active)) / len(active) if active else np.array([1.0])
-            terms.append(active)
-            weights.append(w)
-        return terms, weights
-
-    terms_i, weights_i = precompute(df_omim)
-    terms_j, weights_j = precompute(df_orpha)
-
-    all_terms = list({h for ts in terms_i + terms_j for h in ts})
-    term2idx = {h: k for k, h in enumerate(all_terms)}
-    E = W[[node2id_w[h] for h in all_terms]]
-
-    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]
-    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]
-
-    emb_i = [E[idx] if idx else None for idx in idx_i]
-    emb_j = [E[idx] if idx else None for idx in idx_j]
-
-    # Filtrer les j valides une seule fois
-    valid_j = [j for j, e in enumerate(emb_j) if e is not None]
-    emb_j_valid = [emb_j[j] for j in valid_j]
-    weights_j_valid = [weights_j[j] for j in valid_j]
-
-    def compute_row(i):
-        row = np.zeros(len(emb_j))
-        if emb_i[i] is None:
-            return i, row
-        
-        # Une seule passe torch pour toutes les distances
-        # cost_matrices = compute_all_distances(emb_i[i], emb_j_valid)
-        
-        for k, j in enumerate(valid_j):
-            #_, row[j] = compute_transport(
-                #cost_matrices[k], weights_i[i], weights_j_valid[k])
-            '''    
-            projections = [10, 20, 50, 100, 200, 500, 1000]
-            n_repeat = 20  # répétitions pour estimer la variance
-            results = {}
-            for n_proj in projections:
-                vals = [ot.sliced_wasserstein_distance(
-                    emb_i[i], emb_j[j],
-                    a=weights_i[i], b=weights_j[j],
-                    n_projections=n_proj, seed=k)
-                    for k in range(n_repeat)]
-                results[n_proj] = (np.mean(vals), np.std(vals))
-                print(f"n={n_proj:>5}  mean={results[n_proj][0]:.4f}  std={results[n_proj][1]:.5f}")    
-            '''
-            row[j] = ot.sliced_wasserstein_distance(
-                emb_i[i], emb_j_valid[k], 
-                a=weights_i[i], b=weights_j_valid[k],
-                n_projections=100)
-        return i, row
-
-    results = Parallel(n_jobs=-1)(
-        delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
-    )
-
     C = np.zeros((len(df_omim), len(df_orpha)))
     for i, row in results:
         C[i] = row

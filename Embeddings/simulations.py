@@ -253,7 +253,7 @@ def similarity_matrix(df, mendelian_list):
         for m in sublist:                                    # pour chaque mendélienne dans la liste
             maladies_mendeliennes_df.add(int(m.strip()))
     maladies_mendeliennes_totale = list(sorted(
-        maladies_mendeliennes_df.union({int(m) for m in mendelian_list})))  # Ajouter des maladies supplémentaires
+        maladies_mendeliennes_df.union({int(m) for m in mendelian_list})))  # Mendéliennes ayant servi à la simulation
     n = len(maladies_mendeliennes_totale)
 
     # Création d'un index pour les maladies mendéliennes

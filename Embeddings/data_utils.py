@@ -1,11 +1,16 @@
+import torch
 import pandas as pd 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 from collections import deque
+from tqdm import tqdm
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from frechetmean import frechet_mean
 
 
 def compute_depths(objects, data):
@@ -123,7 +128,44 @@ def find_gene_correspondence(df, disease_col, gene_col):
     
     return pd.DataFrame(matches)
 
+
+def compute_disease_barycenters(profils_omim, node2id, model, deprecated, weights=None, normalize=False, c=1):
     
+    model.eval()
+    W = model.weight.detach().cpu()
+    hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]
+
+    col_meta = {}
+    for col in hpo_cols:
+        resolved = deprecated.get(col, col)
+        if resolved in node2id:
+            w = weights[resolved] if (weights is not None and resolved in weights) else 1.0
+            col_meta[col]=(W[node2id[resolved]], w)  # (Coordonnée, pondération)
+
+    valid_cols = list(col_meta.keys())
+    barycenters = []
+    for _, row in tqdm(profils_omim.iterrows(), total=len(profils_omim), desc="Barycentres"):
+        active = [(col_meta[col][0], col_meta[col][1])
+                  for col in valid_cols if row[col] == 1]  # Termes actifs
+
+        if len(active) < 1:
+            barycenters.append(None)
+            continue
+
+        points = torch.stack([a[0] for a in active])
+        if weights is None:
+            w = None
+        else:
+            w = torch.tensor([a[1] for a in active], dtype=torch.float32)
+            if normalize:
+                w = w / w.sum()
+        barycenter = frechet_mean(points, c, w)
+        barycenters.append(barycenter.numpy())
+
+    profils_omim['barycenter'] = barycenters
+    return profils_omim
+ 
+
 def compare_barycenters(profils_uniform, profils_weighted, model, node2id, deprecated, weights, disease_id=3):
     model.eval()
     W = model.weight.detach().cpu().numpy()
@@ -203,66 +245,95 @@ def compare_barycenters(profils_uniform, profils_weighted, model, node2id, depre
     plt.show()
 
 
-def visualize_barycenter(profils_omim, node2id, model, deprecated, weights=None, disease_id=3):
+def visualize_barycenter(profils_omim, node2id, model, deprecated, disease_ids, weights=None):
     model.eval()
     W = model.weight.detach().cpu().numpy()
-
-    row = profils_omim.loc[disease_id]
     hpo_cols = [col for col in profils_omim.columns if col.startswith('HP:')]
-    active = [col for col in hpo_cols if row[col] == 1 and deprecated.get(col, col) in node2id]
-
-    embs = np.stack([W[node2id[deprecated.get(t, t)]] for t in active])
-    bary = row['barycenter']
+    
+    diseases_dict = {}
+    for d in disease_ids:
+        row = profils_omim.loc[d]
+        active = [col for col in hpo_cols if row[col] == 1 and deprecated.get(col, col) in node2id]
+        embs = np.stack([W[node2id[deprecated.get(t, t)]] for t in active])
+        bary = row['barycenter']
+        diseases_dict[d]={'active': active, 'embs': embs, 'bary': bary}
     root = W[node2id['HP:0000001']]
 
     # PCA dans l'espace ambiant sur les termes actifs + barycentre + racine
-    all_points = np.vstack([embs, bary, root])
+    all_points = np.vstack(
+        [root.reshape(1, -1)] + 
+        [d['bary'].reshape(1, -1) for d in diseases_dict.values()] + 
+        [d['embs'] for d in diseases_dict.values()])
     pca = PCA(n_components=2)
     projected = pca.fit_transform(all_points)
 
-    embs_2d = projected[:-2]
-    bary_2d = projected[-2]
-    root_2d = projected[-1]
-
-    # Normaliser pour rester dans la boule unité visuellement
     max_norm = np.linalg.norm(projected, axis=1).max()
-    embs_2d = embs_2d / max_norm
-    bary_2d = bary_2d / max_norm
-    root_2d = root_2d / max_norm
+    projected = projected / max_norm
+    root_2d = projected[0]
+    idx = 1
+    for d in diseases_dict:
+        diseases_dict[d]['bary_2d'] = projected[idx]
+        idx += 1
+    for d in diseases_dict:
+        n = len(diseases_dict[d]['embs'])
+        diseases_dict[d]['embs_2d'] = projected[idx:idx + n]
+        idx += n
+        
+    # --- Palette de couleurs pour distinguer les maladies ---
+    palette = cm.get_cmap('tab10', len(diseases_dict))
+    colors = {did: palette(i) for i, did in enumerate(diseases_dict)}
 
-    # Poids pour la taille des points
-    if weights is not None:
-        sizes = np.array([weights.get(deprecated.get(t, t), 1e-4) for t in active])
-        sizes = 20 + 200 * (sizes - sizes.min()) / (sizes.max() - sizes.min() + 1e-10)
-    else:
-        sizes = np.full(len(active), 40)
-
-    fig, ax = plt.subplots(figsize=(7, 7))
-
-    # Boule de Poincaré
-    circle = plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', linewidth=0.8)
+    fig, ax = plt.subplots(figsize=(9, 9))
+    circle = plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', linewidth=0.8, zorder=1)
     ax.add_patch(circle)
+    ax.scatter(*root_2d, s=180, c='black', marker='D', zorder=6,
+               label='Racine HP:0000001')
 
-    # Termes actifs
-    sc = ax.scatter(embs_2d[:, 0], embs_2d[:, 1], s=sizes, alpha=0.6,
-                    c=np.linalg.norm(embs_2d, axis=1), cmap='plasma', zorder=3)
+    for d, data in diseases_dict.items():
+        color = colors[d]
+        embs_2d = data['embs_2d']
+        bary_2d = data['bary_2d']
+        active = data['active']
 
-    # Lignes vers le barycentre
-    for pt in embs_2d:
-        ax.plot([pt[0], bary_2d[0]], [pt[1], bary_2d[1]],
-                color='gray', alpha=0.15, linewidth=0.5, zorder=2)
+        # Taille des points selon poids optionnels
+        if weights is not None:
+            sizes = np.array([
+                weights.get(deprecated.get(t, t), 1e-4) for t in active
+            ])
+            sizes = 20 + 200 * (sizes - sizes.min()) / (
+                sizes.max() - sizes.min() + 1e-10)
+        else:
+            sizes = np.full(len(active), 40)
 
-    # Barycentre
-    ax.scatter(*bary_2d, s=200, c='red', marker='*', zorder=5, label='Barycentre')
+        # Lignes terme - barycentre
+        for pt in embs_2d:
+            ax.plot([pt[0], bary_2d[0]], [pt[1], bary_2d[1]],
+                    color=color, alpha=0.12, linewidth=0.5, zorder=2)
 
-    # Racine
-    ax.scatter(*root_2d, s=150, c='blue', marker='D', zorder=5, label='Racine HP:0000001')
+        # Termes HPO actifs
+        ax.scatter(embs_2d[:, 0], embs_2d[:, 1],
+                   s=sizes, color=color, alpha=0.5, zorder=3,
+                   edgecolors='none')
 
-    plt.colorbar(sc, ax=ax, label='norme (profondeur)')
-    ax.set_xlim(-1.1, 1.1)
-    ax.set_ylim(-1.1, 1.1)
+        # Barycentre (étoile colorée + contour noir pour lisibilité)
+        ax.scatter(*bary_2d, s=250, color=color, marker='*',
+                   zorder=5, edgecolors='black', linewidths=0.6,
+                   label=f'Maladie {d} ({len(active)} termes)')
+
+        # Étiquette du barycentre
+        ax.annotate(str(d), xy=bary_2d,
+                    xytext=(bary_2d[0] + 0.03, bary_2d[1] + 0.03),
+                    fontsize=8, color=color, zorder=7,
+                    arrowprops=dict(arrowstyle='-', color=color,
+                                    lw=0.5, alpha=0.5))
+
+    ax.set_xlim(-1.15, 1.15)
+    ax.set_ylim(-1.15, 1.15)
     ax.set_aspect('equal')
-    ax.legend()
-    ax.set_title(f"Maladie {disease_id} — {len(active)} termes HPO\n(projection PCA : boule de Poincaré)")
+    ax.legend(loc='upper right', fontsize=8, framealpha=0.8)
+    ax.set_title(
+        f"Barycentres de {len(diseases_dict)} maladies — projection PCA (boule de Poincaré)\n"
+        f"variance expliquée : {pca.explained_variance_ratio_.sum() * 100:.1f}%"
+    )
     plt.tight_layout()
     plt.show()
