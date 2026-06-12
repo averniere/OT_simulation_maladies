@@ -3,52 +3,31 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-import ast
 import datetime
-import time
 import os
 
 from poincare import PoincareManifold
-from lorentz import LorentzManifold
 from model import Distance_PE
 from RSGD import RiemanianSGD
 from batched_dataset import BatchedDataset
 from train import train
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-data_path = os.path.join(current_dir, "..", "data", "HPOs.csv")
-
-df_hpo = pd.read_csv(data_path, sep=";")
-df_hpo = df_hpo.drop(columns = ["definition", "synonyms"])
-df_hpo['parents'] = df_hpo['parents'].apply(ast.literal_eval)
-
-G_hpo = nx.DiGraph()
-
-for i, row in df_hpo.iterrows():
-    G_hpo.add_node(row['hp_id'])
-
-for j, row in df_hpo.iterrows():
-    for parent_id in row["parents"]:
-        if parent_id in G_hpo:
-            G_hpo.add_edge(row['hp_id'], parent_id)  # Permet d'avoir la racine au centre            
-
-# TEST : graphe non orienté ------------------------------------
-G_hpo_tc = nx.transitive_closure(G_hpo)  # fermeture transitive
-
-#G_hpo_sym = nx.DiGraph()
-#for u, v in G_hpo_tc.edges():
-    #G_hpo_sym.add_edge(u, v)
-    #G_hpo_sym.add_edge(v, u) 
-# --------------------------------------------------------------
+from data import *
+from data_utils import add_corresponding_terms, add_edges
 
 
-objects = list(G_hpo.nodes())
+# TEST : on relie les termes présents dans une même maladie ----------------------------------
+
+union_diseases = add_corresponding_terms(work_omim, work_orpha, df_orpha_omim)
+G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
+
+# --------------------------------------------------------------------------------------------
+
+objects = list(G_hpo_work.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo.edges()],dtype=np.int64)
-
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work.edges()],dtype=np.int64)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
-
+# TEST : Fermeture transitive partielle ------------------------------------------------------
 def partial_transitive_closure(edges, max_depth=3):
     G = nx.DiGraph()
     G.add_edges_from(edges)
@@ -66,7 +45,7 @@ def partial_transitive_closure(edges, max_depth=3):
 
 edges_closed = partial_transitive_closure(edges, max_depth=3)
 print(f"Arêtes avant : {len(edges)}, après : {len(edges_closed)}")
-
+# -------------------------------------------------------------------------------------------
 
 DIM = 15
 EPOCHS = 1500
@@ -160,27 +139,6 @@ losses, norms = train(
     c_optimizer=c_optimizer
 )
 
-
-'''
-torch.save({
-    'model_state_dict': model.state_dict(),
-    'data': data, 
-    'objects': objects,
-    'node2id': node2id,
-    'edges': edges,
-    'losses': losses,
-    'norm_history': norms,
-    'hyperparams': {
-        'dim': DIM,
-        'epochs':  EPOCHS,
-        'lr': LR,
-        'burnin': BURN_IN,
-        'n_neg': NNEGS,
-    }
-}, 'models/poincare_hpo.pt')
-
-os.rename("models/poincare_hpo.pt", os.path.join("models/", f"poincare_hpo_{LR}_{EPOCHS}_WN{NNEGS}_{BATCH_SIZE}.pt"))
-'''
 
 # Diagnostic 3
 def visualize_training(model, losses, norm_history, objects, node2id, lr, burnin):

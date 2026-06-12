@@ -17,10 +17,10 @@ def prepare_data(df, with_labels=True, normalize=False, n_pca=0):
 
 	n = len(df.columns)
 	if with_labels:
-		x = np.double(df.values[:, 1:])
-		labels = df.values[:, 0]
-		labels = labels.astype(str)
 		colnames = [c for c in df.columns if c.startswith('HP')]
+		x = np.double(df[colnames].values)
+		labels = df['database_id'].values
+		labels = labels.astype(str)	
 	else:
 		x = np.double(df.values)
 		labels = ['unknown'] * np.size(x, 0)
@@ -203,10 +203,6 @@ def compute_rfa(
 		n_components, labels = csgraph.connected_components(KNN, directed=False)
 		print("n_components KNN", n_components)
 		
-		old_duplicates = [431, 558, 1028, 1098, 1101, 1102]  # etc.
-		for node in old_duplicates:
-			print(f"Nœud {node} → composante {labels[node]}, même que 429 ({labels[429]}) : {labels[node] == labels[429]}")
-
 		if connected and (n_components > 1):
 			distances = pairwise_distances(features, metric=distlocal, n_jobs=-1)
 			print(f"NaN dans distances : {np.isnan(distances).sum()}")
@@ -243,9 +239,9 @@ def compute_rfa(
 		S = np.exp(-KNN / sigma)
 	S[KNN == 0] = 0
 	if correspondances is not None:
-        for (i, j) in correspondances:
-            S[i, j] = 1.0
-            S[j, i] = 1.0
+		for (i, j) in correspondances:
+			S[i, j] = 1.0
+			S[j, i] = 1.0
 	L = csgraph.laplacian(S, normed=False)
 
 	n = L.shape[0]
@@ -262,64 +258,59 @@ def build_pairs_KNN(KNN, distances, correspondances, k_neighbours, method_KNN):
 	connexion peut prendre les valeurs 'nearest' ou 'both' selon la manière dont on connecte les voisins
 	aux paires.
 	"""
-	methods_list = {'union', 'intersection', 'closest'}
-	connexions_list = {'nearest', 'both'}
-	parts = method_knn.rsplit('_', 1)
-	method, connexion = parts[0], parts[1]
+	parts = method_KNN.rsplit('_', 1)
+	method, connection = parts[0], parts[1]
 
 	def _top_k(node, k, exclude):
-        dists = all_distances[node].copy()
-        for e in exclude:
-            dists[e] = np.inf
-        idx = np.argsort(dists)[:k]
-        return idx, dists[idx]
-
-    for (i, j) in correspondances:
-        exclude = {i, j}
-        if method == 'union':
-            nbrs_i, di = _top_k(i, k_neighbours, exclude)
-            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
-            all_nbrs = {n: (di[idx], np.inf) for idx, n in enumerate(nbrs_i)}
-            for idx, n in enumerate(nbrs_j):
-                di_n, _ = all_nbrs.get(n, (np.inf, np.inf))
-                all_nbrs[n] = (di_n, dj[idx])
-
-        elif method == 'intersection':
-            nbrs_i, di = _top_k(i, k_neighbours, exclude)
-            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
-            set_i = {n: di[idx] for idx, n in enumerate(nbrs_i)}
-            set_j = {n: dj[idx] for idx, n in enumerate(nbrs_j)}
-            common = set(set_i) & set(set_j)
-            all_nbrs = {n: (set_i[n], set_j[n]) for n in common}
-
-        elif method == 'closest':
-            nbrs_i, di = _top_k(i, k_neighbours, exclude)
-            nbrs_j, dj = _top_k(j, k_neighbours, exclude)
-            # Union dédupliquée : distance de l'entité = min(d(n,i), d(n,j))
-            merged = {}
-            for idx, n in enumerate(nbrs_i):  # Voisins de i
-                merged[n] = (di[idx], np.inf)  # (distance à i, distance à j)
-            for idx, n in enumerate(nbrs_j):
-                prev_di, _ = merged.get(n, (np.inf, np.inf))  # Si n déjà parcouru comme voisin de i
-                merged[n] = (prev_di, dj[idx])  # (distance à i, diastance à j)
+		dists = distances[node].copy()
+		for e in exclude:
+			dists[e] = np.inf
+		idx = np.argsort(dists)[:k]
+		return idx, dists[idx]
+	
+	for (i, j) in correspondances:
+		exclude = {i, j}
+		if method == 'union':
+			nbrs_i, di = _top_k(i, k_neighbours, exclude)
+			nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+			all_nbrs = {n: (di[idx], np.inf) for idx, n in enumerate(nbrs_i)}
+			for idx, n in enumerate(nbrs_j):
+				di_n, _ = all_nbrs.get(n, (np.inf, np.inf))
+				all_nbrs[n] = (di_n, dj[idx])
+		elif method == 'intersection':
+			nbrs_i, di = _top_k(i, k_neighbours, exclude)
+			nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+			set_i = {n: di[idx] for idx, n in enumerate(nbrs_i)}
+			set_j = {n: dj[idx] for idx, n in enumerate(nbrs_j)}
+			common = set(set_i) & set(set_j)
+			all_nbrs = {n: (set_i[n], set_j[n]) for n in common}
+		elif method == 'closest':
+			nbrs_i, di = _top_k(i, k_neighbours, exclude)
+			nbrs_j, dj = _top_k(j, k_neighbours, exclude)
+			# Union dédupliquée : distance de l'entité = min(d(n,i), d(n,j))
+			merged = {}
+			for idx, n in enumerate(nbrs_i):  # Voisins de i
+				merged[n] = (di[idx], np.inf)  # (distance à i, distance à j)
+			for idx, n in enumerate(nbrs_j):
+				prev_di, _ = merged.get(n, (np.inf, np.inf))  # Si n déjà parcouru comme voisin de i
+				merged[n] = (prev_di, dj[idx])  # (distance à i, diastance à j)
             # Trier par min(d_i, d_j) et garder les k meilleurs
-            ranked = sorted(merged.items(), key=lambda x: min(x[1][0], x[1][1]))
-            all_nbrs = dict(ranked[:k_neighbours])
+			ranked = sorted(merged.items(), key=lambda x: min(x[1][0], x[1][1]))
+			all_nbrs = dict(ranked[:k_neighbours])
 
-        for n, (di, dj) in all_nbrs.items():  # Voisins retenus et leurs distances à i et j
-            if connection == 'both':  # On connecte à i et j
-                edges = [(i, n, d_to_i), (j, n, d_to_j)]
-            else:  # 'nearest' : on connecte au noeud le plus proche (i ou j)
-                if di <= dj:
-                    edges = [(i, n, di)]
-                else:
-                    edges = [(j, n, dj)]
-
-            for src, tgt, d in edges:
-                if np.isinf(d):
-                    d = all_distances[src, tgt]
-                if KNN[src, tgt] == 0 or d < KNN[src, tgt]:
-                    KNN[src, tgt] = d
-                if KNN[tgt, src] == 0 or d < KNN[tgt, src]:
-                    KNN[tgt, src] = d
-    return KNN
+		for n, (di, dj) in all_nbrs.items():  # Voisins retenus et leurs distances à i et j
+			if connection == 'both':  # On connecte à i et j
+				edges = [(i, n, di), (j, n, dj)]
+			else:  # 'nearest' : on connecte au noeud le plus proche (i ou j)
+				if di <= dj:
+					edges = [(i, n, di)]
+				else:
+					edges = [(j, n, dj)]
+			for src, tgt, d in edges:
+				if np.isinf(d):
+					d = distances[src, tgt]
+				if KNN[src, tgt] == 0 or d < KNN[src, tgt]:
+					KNN[src, tgt] = d
+				if KNN[tgt, src] == 0 or d < KNN[tgt, src]:
+					KNN[tgt, src] = d			
+	return KNN

@@ -5,12 +5,62 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 from collections import deque
+from itertools import combinations
 from tqdm import tqdm
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from frechetmean import frechet_mean
+
+
+def add_edges(diseases, G, depths):
+    """
+    Si pi et pj sont deux termes actifs d'une même maladie, non reliés dans l'ontologie,
+    ajouter une arête entre eux.
+    """
+    G_hpo = G.copy()
+    hpo_cols = [c for c in diseases.columns if c.startswith('HP')]
+    cols2id = {i: hp for i, hp in enumerate(hpo_cols)}
+    X = diseases[hpo_cols].values
+    existing_edges = set(G_hpo.edges())
+    new_edges = set()
+    for i in tqdm(range(len(diseases))):
+        active_i = np.where(X[i] == 1)[0]   # termes actifs de la maladie i
+        if len(active_i) < 2:
+            continue
+        for idx1, idx2 in combinations(active_i, 2):
+            hp1, hp2 = cols2id[idx1], cols2id[idx2]
+            d1, d2 = depths[hp1], depths[hp2]
+            if d2 >= d1:
+                edge = (hp2, hp1)
+            else:
+                edge = (hp1, hp2)
+            if edge not in existing_edges:
+                new_edges.add(edge)
+    G_hpo.add_edges_from(new_edges)
+    return G_hpo
+
+
+def add_corresponding_terms(df1, df2, correspondances):
+    """
+    Pour les maladies de df1 qui ont une maladie correspondante dans df2, ajouter les termes actifs
+    de df2 qui ne sont pas dans df1.
+    """
+    result = df1.copy()
+    hpo_cols = [c for c in df1.columns if c.startswith('HP')]
+    df1_to_idx = {v: i for i, v in enumerate(df1['database_id'].values)} 
+    df2_to_idx = {v: i for i, v in enumerate(df2['database_id'].values)}
+    for _, row in correspondances.iterrows():
+        d1 = row['omim_id']
+        d2 = row['orpha_id']
+        if d1 not in df1_to_idx.keys() or d2 not in df2_to_idx.keys():
+            continue
+        result.loc[d1, hpo_cols] = (
+            result.loc[d1][hpo_cols].values |
+            df2.loc[d2][hpo_cols].values
+        ).astype(int)
+    return result
 
 
 def compute_depths(objects, data):

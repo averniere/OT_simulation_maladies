@@ -19,16 +19,16 @@ import os
 import os.path
 
 
-DIM = 10
-GAMMA = 3.
-LR = 0.07
-K_NEIGHBOURS = 15
-SIGMA = 1.0
-EARLY_STOP = 0.005
-N_PCA = 0
+DIM = 15
+GAMMA = 0.5
+LR = 0.1
+K_NEIGHBOURS = 10
+SIGMA = 0.1
+EARLY_STOP = 0.0001
+N_PCA = 200
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(DEVICE)
-
+print("Device : ", DEVICE)
+distlocal = 'minkowski'
 
 def get_dir_name(models_dir):
     """Gets a directory to save the model.
@@ -65,7 +65,8 @@ models_dir = os.path.join("logs/", date)
 save_dir = get_dir_name(models_dir)
 
 # Chargement des données
-work = pd.concat(work_omim, work_orpha).reset_index()
+work = pd.concat([work_omim, work_orpha]).reset_index()
+print(f"Taille du jeu de données : {work.shape}")
 omim_to_idx = {v: i for i, v in enumerate(work['database_id'].values) if v.startswith('OMIM')} 
 orpha_to_idx = {v: i for i, v in enumerate(work['database_id'].values) if v.startswith('ORPHA')}
 correspondances = []
@@ -77,7 +78,7 @@ for _, row in df_orpha_omim.iterrows():
 
 # Préparation des données
 print("="*10, "Préparation des données", "="*10)
-x, features, labels = prepare_data(profils_omim, with_labels=True, normalize=False, n_pca=N_PCA)
+x, features, labels = prepare_data(work, with_labels=True, normalize=False, n_pca=N_PCA)
 
 
 def get_cache_path(k_neighbours, sigma, distlocal, sym, connected, n_pca=0):
@@ -90,7 +91,7 @@ def get_cache_path(k_neighbours, sigma, distlocal, sym, connected, n_pca=0):
     return f"../cache/rfa_{hash_str}.pkl"
 
 
-cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, 'minkowski', False, True, n_pca=N_PCA)
+cache_path = get_cache_path(K_NEIGHBOURS, SIGMA, distlocal, False, True, n_pca=N_PCA)
 
 if os.path.exists(cache_path):
     print("Chargement RFA depuis le cache...")
@@ -98,8 +99,10 @@ if os.path.exists(cache_path):
         RFA, D_high = pickle.load(f)
 else:
     print("Calcul RFA...")
-    RFA, D_high = compute_rfa(features, mode='features', k_neighbours=K_NEIGHBOURS,
-                               sym=False, connected=True, sigma=SIGMA, distlocal='minkowski')
+    RFA, D_high = compute_rfa(
+        features, mode='features', k_neighbours=K_NEIGHBOURS, 
+        sym=False, connected=True, sigma=SIGMA, distlocal=distlocal,
+        correspondances=correspondances, use_knn=True, method_knn='closest_both')
     os.makedirs("../cache", exist_ok=True)
     with open(cache_path, 'wb') as f:
         pickle.dump((RFA, D_high), f)
@@ -109,7 +112,7 @@ else:
 # print("RFA min/max/std :", RFA.min().item(), RFA.max().item(), RFA.std().item())
 # print("RFA diag mean :", RFA.diagonal().mean().item())  # valeurs dominantes ?
 
-batchsize = 16
+batchsize = 64
 if batchsize < 0:
     batchsize = min(512, int(len(RFA)/10))
     print('batchsize = ', batchsize)
@@ -124,15 +127,41 @@ if torch.cuda.is_available():
 dataset = TensorDataset(indices, RFA)
 
 manifold = PoincareManifold()
-model = Poincarre_embeddings(n=len(dataset), dim=DIM, manifold=manifold, Qdist='laplace', lossfn='klSym', gamma=GAMMA)
+model = Poincarre_embeddings(
+    n=len(dataset), 
+    dim=DIM, 
+    manifold=manifold, 
+    gamma=GAMMA,
+    learn_curvature=False, 
+    init_curvature=1.,
+    Qdist='laplace', 
+    lossfn='klSym')
 
-optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold)
+optimizer = RiemanianSGD(model.parameters(), lr=lr, manifold=manifold, c=model.c.item())
 
-args = {"epochs": 500, "lr": lr, "burnin": 20, "batchsize": batchsize, "lrm": 0.1}
+args = {
+    "epochs": 750, 
+    "lr": lr, 
+    "burnin": 20, 
+    "batchsize": batchsize, 
+    "lrm": 0.1, 
+    'dim':DIM,
+    'gamma': GAMMA,
+    }
 
-embeddings, loss, epoch_loss, epoch = train(model, dataset, optimizer, args, device=DEVICE, labels=labels, earlystop=EARLY_STOP)
+embeddings, loss, epoch_loss, epoch = train(
+    model, 
+    dataset, 
+    optimizer, 
+    args, 
+    DEVICE,
+    save_dir,
+    D_high, 
+    labels=labels, 
+    earlystop=EARLY_STOP,)
 
 
+"""
 torch.save({
     'model_state_dict': model.state_dict(),
     'embeddings': embeddings,
@@ -148,48 +177,4 @@ torch.save({
         'batchsize': args["batchsize"]
     }
 }, 'models/poincare_hpo.pt')
-
-os.rename("models/poincare_hpo.pt", os.path.join("models/", f"omim_S{SIGMA}_G{GAMMA}_K{K_NEIGHBOURS}_LR{args["lr"]}_D{DIM}.pt"))
-
-
-# Diagnostic 3
-def visualize_training(losses, W):
-
-    norms = np.linalg.norm(W, axis=1)
-    
-    fig, axes = plt.subplots(1, 2, figsize=(18, 5))
-    
-    # ── 1. Disque de Poincaré ─────────────────────────────────────────
-    ax = axes[0]
-    ax.add_patch(plt.Circle((0, 0), 1.0, color='gray', fill=False, lw=1.5, ls='--'))
-    sc = ax.scatter(W[:, 0], W[:, 1], c=norms, cmap='plasma',
-                    s=10, alpha=0.7, vmin=0, vmax=1)
-    plt.colorbar(sc, ax=ax, label='‖θ‖')
-    ax.scatter(W[0, 0], W[0, 1], c='red', s=10, alpha=0.7, edgecolors='black', linewidth=0.5)
-    ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.1, 1.1)
-    ax.set_aspect('equal')
-    ax.set_title(f'Embeddings finaux\nnorme max={norms.max():.3f}  moy={norms.mean():.3f}')
-
-    # Loss
-    ax = axes[1]
-    ax.plot(losses, color='steelblue', lw=2)
-    ax.axvline(args["burnin"], color='orange', ls='--', label=f'fin burn-in ({args["burnin"]})')
-    ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-    ax.set_title('Courbe de loss')
-    ax.legend(); ax.grid(alpha=0.3)
-
-    plt.suptitle(
-        f'Run — dim={W.shape[1]} | lr ={args["lr"]} |'
-        f'{len(losses)} epochs| batch_size ={args["batchsize"]}|dim ={DIM}',
-        fontsize=12, y=1.02
-    )
-    plt.tight_layout()
-    
-    fname = f"plots/omim_{args["epochs"]}_LR{args["lr"]}_G{GAMMA}_D{DIM}.pt.png"
-    plt.savefig(fname, dpi=150, bbox_inches='tight')
-    print(f"Figure sauvegardée : {fname}")
-    plt.show()
-    
-    return fig
-
-visualize_training(loss, embeddings)
+"""

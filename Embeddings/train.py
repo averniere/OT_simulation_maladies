@@ -56,7 +56,7 @@ def train(
             # inputs : LongTensor (B, 2+nnegs)
             # target : index de la paire positive = 0 pour chaque ligne
             targets = torch.zeros(inputs.size(0), dtype=torch.long)
-            inputs  = inputs.to(device)
+            inputs = inputs.to(device)
             targets = targets.to(device)
 
             optimizer.zero_grad()

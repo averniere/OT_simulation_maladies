@@ -14,7 +14,7 @@ def klSym(preds, targets):
 
 class Poincarre_embeddings(nn.Module):
 
-    def __init__(self, n, dim, manifold, Qdist='Laplace', lossfn='klSym', gamma=1.0, cuda=0):
+    def __init__(self, n, dim, manifold, gamma, learn_curvature, init_curvature, Qdist='Laplace', lossfn='klSym'):
         super(Poincarre_embeddings, self).__init__()
         self.dim = dim
         self.n = n
@@ -28,6 +28,11 @@ class Poincarre_embeddings(nn.Module):
         self.sm = nn.Softmax(dim=1)
         self.lsm = nn.LogSoftmax(dim=1)
 
+        if learn_curvature:
+            self._log_c = nn.Parameter(torch.tensor(float(init_curvature)).log())
+        else:
+            self.register_buffer('_log_c', torch.tensor(float(init_curvature)).log())
+
         if lossfn == 'kl':
             self.lossfn = nn.KLDivLoss()
         elif lossfn == 'klSym':
@@ -37,9 +42,13 @@ class Poincarre_embeddings(nn.Module):
         else:
             raise NotImplementedError
 
-        if cuda:
-            self.lt.cuda()
-
+    @property
+    def c(self):
+        """Courbure toujours positive via exp."""
+        return self._log_c.exp()
+    
+    def energy(self, s, o):
+        return self.manifold.distance(s, o, self.c)
 
     def forward(self, inputs):
         embs_all = self.embeddings.weight.unsqueeze(0)
@@ -48,7 +57,7 @@ class Poincarre_embeddings(nn.Module):
         embs_inputs = self.embeddings(inputs).unsqueeze(1)
         embs_inputs = embs_inputs.expand_as(embs_all)
 
-        dists = self.manifold.distance(embs_inputs, embs_all).squeeze(-1)
+        dists = self.manifold.distance(embs_inputs, embs_all, self.c).squeeze(-1)
 
         if self.lossfnname == 'kl':
             if self.Qdist == 'laplace':

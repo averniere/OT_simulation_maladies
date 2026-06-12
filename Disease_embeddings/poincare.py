@@ -3,6 +3,28 @@ import numpy as np
 from torch.autograd import Function
 
 
+def tanh(x, clamp=15):
+    return x.clamp(-clamp, clamp).tanh()
+
+
+def artanh(x):
+    return Artanh.apply(x)
+
+
+class Artanh(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        x = x.clamp(-1 + 1e-15, 1 - 1e-15)
+        ctx.save_for_backward(x)
+        z = x.double()
+        return (torch.log_(1 + z).sub_(torch.log_(1 - z))).mul_(0.5).to(x.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        return grad_output / (1 - input ** 2)
+
+
 class Distance(Function):
     '''
     Distance sur la boule de Poincaré et son gradient.
@@ -25,9 +47,6 @@ class Distance(Function):
 
     @staticmethod
     def forward(ctx, u, v, eps):
-        '''
-        Calcule la distance de Poincaré entre deux points u et v.
-        '''
         squnorm = torch.clamp(torch.sum(u * u, dim=-1), 0, 1 - eps)
         sqvnorm = torch.clamp(torch.sum(v * v, dim=-1), 0, 1 - eps)
         sqdist = torch.sum(torch.pow(u - v, 2), dim=-1)
@@ -52,21 +71,43 @@ class PoincareManifold():
     def __init__(self, eps=1e-2, K=None, max_norm=1, **kwargs):
         self.eps = eps
         self.max_norm = max_norm-eps
+        self.min_norm = 1e-15
         self.K = K
         if K is not None:
             self.inner_radius = 2 * K / (1 + np.sqrt(1 + 4 * K * self.K))
 
+    def normalize(self, u, c):
+        return self.proj_x(u,c)
 
-    def normalize(self, u):
-        d = u.size(-1)
-        if self.max_norm:
-            u.view(-1, d).renorm_(2, 0, self.max_norm) # ou 2 ?
-        return u
+    def proj_x(self, x, c):
+        norm = torch.clamp_min(x.norm(dim=-1, keepdim=True, p=2), self.min_norm)
+        maxnorm = (1 - self.eps) / (c ** 0.5)
+        scale = (maxnorm / norm).clamp(max=1.0)
+        return x * scale    
 
+    def distance(self, u, v, c):
+        sqrt_c = c ** 0.5
+        mob = self.mobius_add(-u, v, c, dim=-1)
+        mob_norm = mob.norm(dim=-1, p=2).clamp(1e-10, 1. - 1e-5)
+        return 2 / sqrt_c * artanh(sqrt_c * mob_norm)
 
-    def distance(self, u, v):
-        return Distance.apply(u, v, self.eps)
+    def mobius_add(self, x, y, c, dim=-1):
+        x2 = x.pow(2).sum(dim=dim, keepdim=True)
+        y2 = y.pow(2).sum(dim=dim, keepdim=True)
+        xy = (x * y).sum(dim=dim, keepdim=True)
+        num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
+        denom = 1 + 2 * c * xy + c ** 2 * x2 * y2
+        return num / denom.clamp_min(self.min_norm)
+    
+    def lambda_x(self, x, c):
+        x_sqnorm = torch.sum(x.pow(2), dim=-1, keepdim=True)
+        return 2 / (1. - c * x_sqnorm).clamp_min(self.min_norm)
 
+    def egrad2rgrad(self, p, dp, c):
+        """Remplace rgrad — version correcte avec courbure variable."""
+        lambda_p = self.lambda_x(p, c)
+        dp = dp / lambda_p.pow(2)
+        return dp
 
     def half_aperture(self, u):
         eps = self.eps
@@ -74,7 +115,6 @@ class PoincareManifold():
         sqnu.clamp_(min=0, max=1 - eps)
         return torch.asin((self.inner_radius * (1 - sqnu) / torch.sqrt(sqnu))
             .clamp(min=-1 + eps, max=1 - eps))
-
 
     def angle_at_u(self, u, v):
         norm_u = u.norm(2, dim=-1)
@@ -84,20 +124,6 @@ class PoincareManifold():
         num = (dot_prod * (1 + norm_v ** 2) - norm_v ** 2 * (1 + norm_u ** 2))
         denom = (norm_v * edist * (1 + norm_v**2 * norm_u**2 - 2 * dot_prod).sqrt())
         return (num / denom).clamp_(min=-1 + self.eps, max=1 - self.eps).acos()
-
-
-    def poincare_translation(self, v, x):
-        """
-        Computes the translation of x  when we move v to the center.
-        Hence, the translation of u with -u should be the origin.
-        """
-        xsq = (x ** 2).sum(axis=1)
-        vsq = (v ** 2).sum()
-        xv = (x * v).sum(axis=1)
-        a = np.matmul((xsq + 2 * xv + 1).reshape(-1, 1),
-                v.reshape(1, -1)) + (1 - vsq) * x
-        b = xsq * vsq + 2 * xv + 1
-        return np.dot(np.diag(1. / b), a)
 
     def rgrad(self, p, d_p):
         '''
@@ -117,8 +143,3 @@ class PoincareManifold():
             p_sqnorm = torch.sum(p ** 2, dim=-1, keepdim=True)
             d_p = d_p * ((1 - p_sqnorm) ** 2 / 4).expand_as(d_p)
         return d_p
-
-    def euclidean_retractation(self, p, d_p, lr):
-        p.data.add_(-lr, d_p)
-
-
