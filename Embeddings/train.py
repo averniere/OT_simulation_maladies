@@ -8,15 +8,16 @@ _lr_multiplier = 0.1
 
 def train(
     model,  # Distance_PE
-    data, # BatchedDataset
+    data, # BatchedDataset ou BatchedDatasetNode2Vec si node2vec
     optimizer,  # RiemanianSGD
     epochs,
     lr,
     device,
     burnin,
     eval_each=50,
+    node2vec=True,  # Echantillonnage des négatifs façon Node2Vec
     progress=False,
-    save_dir = None,  # Nouveau paramètre
+    save_dir=None,
     save_every=10,
     verbose=True,
     objects=None,
@@ -43,20 +44,27 @@ def train(
         # Burn_in
         data.burnin = epoch < burnin
         if data.burnin:
-            hard_ratio=0
+            hard_ratio = 0
         else:
-            hard_ratio=0.5
-        current_lr  = lr * _lr_multiplier if data.burnin else lr/(1 + 0.001 * (epoch - burnin))
+            hard_ratio = 0.5
+        current_lr = lr * _lr_multiplier if data.burnin else lr/(1 + 0.001 * (epoch - burnin))
         epoch_loss = torch.zeros(len(data))
-        loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
+        if not node2vec:
+            loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
+        else:
+            loader = tqdm(
+                data.epoch_batches(hyperparams['num_walks'], hyperparams['walk_length']), 
+                total=len(data._active_pairs) // data.batchsize if data._active_pairs is not None else None,
+                desc=f"Epoch {epoch+1}/{epochs}"
+                )
 
         # tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
 
         for i_batch, inputs in enumerate(loader):
             # inputs : LongTensor (B, 2+nnegs)
             # target : index de la paire positive = 0 pour chaque ligne
-            targets = torch.zeros(inputs.size(0), dtype=torch.long)
             inputs = inputs.to(device)
+            targets = torch.zeros(inputs.size(0), dtype=torch.long)
             targets = targets.to(device)
 
             optimizer.zero_grad()
@@ -64,7 +72,7 @@ def train(
 
             u = preds[:, 0, :]   # (B, dim)
             others = preds[:, 1:, :]  # (B, v+nnegs, dim)
-            u_exp  = u.unsqueeze(1).expand_as(others)
+            u_exp = u.unsqueeze(1).expand_as(others)
             # Distance de Poincaré de u à v, n_negs
             scores = model.manifold.distance(u_exp, others, model.c)
 

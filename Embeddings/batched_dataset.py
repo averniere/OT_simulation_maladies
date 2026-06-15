@@ -5,6 +5,7 @@ import scipy
 import networkx as nx
 from collections import deque, defaultdict
 from numpy.random import default_rng
+from tqdm import tqdm
 
 
 def compute_depths(edge_index, num_nodes):
@@ -211,17 +212,6 @@ class BatchedDataset:
                 for i in short:
                     n_missing = self.nnegs - n_valid[i]
                     negs[i, n_valid[i]:] = self.rng.integers(0, self.N, size=n_missing)
-
-                # for i, u in enumerate(batch_us):
-                    # invalid = is_self[i]
-                    # invalid |= np.isin(candidates[i], self.pos_neighbors_arr[u])
-                    # invalid |= np.frompyfunc(lambda x: x in self.pos_neighbors_set[u], 1, 1)(candidates[i]).astype(bool)
-                    # valid = candidates[i][~invalid][:self.nnegs]
-                    # n_missing = self.nnegs - len(valid)
-                    # if n_missing > 0:
-                        # valid = np.concatenate([valid, self.rng.integers(0, self.N, size=n_missing)])
-                    # negs[i] = valid
-
                 ix[mask, 2:] = negs
             yield torch.from_numpy(ix)
 
@@ -323,21 +313,19 @@ class BatchedDatasetNode2Vec:
         return self.alias_setup([x / s for x in probs])
     
     def preprocess_transition_probs(self):
-        G, is_directed = self.G, self.is_directed
+        G = self.G, self.is_directed
         alias_nodes = {}
-        for node in G.nodes():
-            probs = [G[node][nbr]['weight'] for nbr in sorted(G.neighbors(node))]
+        for node in tqdm(G.nodes(), total=len(G.nodes())):
+            probs = [G[node][nbr].get('weight', 1.0) for nbr in sorted(G.neighbors(node))]
             s = sum(probs)
             alias_nodes[node] = self.alias_setup([x / s for x in probs])
-
-        alias_edges = {}
-        for edge in G.edges():
-            alias_edges[edge] = self.get_alias_edge(*edge)
-            if not is_directed:
-                alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
-
         self.alias_nodes = alias_nodes
-        self.alias_edges = alias_edges
+        self.alias_edges = PrecomputeAliasEdges(self)
+            #alias_edges[edge] = self.get_alias_edge(*edge)
+            #if not is_directed:
+                #alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
+
+        # self.alias_edges = alias_edges
 
     def _walks_to_pairs(self, walks):
         """
@@ -357,12 +345,12 @@ class BatchedDatasetNode2Vec:
                         pairs.append((u, walk_idx[j]))
         return np.array(pairs, dtype=int)
 
-    def _sample_negatives(self, u: int):
+    def _sample_negatives(self, u: int, positive_context):
         """
         Tire nnegs indices négatifs pour le nœud u.
         Exclut les voisins positifs et u lui-même.
         """
-        excluded = self.pos_neighbors[u] | {u}
+        excluded = self.pos_neighbors[u] | {u} | positive_context
         negs = []
         while len(negs) < self.nnegs:
             candidates = self.rng.integers(0, self.N, size=self.nnegs * 3)
@@ -386,7 +374,8 @@ class BatchedDatasetNode2Vec:
 
     def epoch_batches(self, num_walks: int, walk_length: int):
         """
-        Yield des tenseurs de shape (B, 1+nnegs, 2) pour une epoch.
+        Yield des tenseurs de taille (B, 1+nnegs) pour une epoch contenant chaque noeud positif
+        et ces noeuds négatifs associés.
         Recalcule les paires si nécessaire (premier appel ou refresh).
         """
         if self._active_pairs is None or self._epoch % self.refresh == 0:
@@ -400,15 +389,30 @@ class BatchedDatasetNode2Vec:
 
         for i in range(n_batches):
             chunk = pairs[i * self.batchsize:(i + 1) * self.batchsize]
-            batch = np.zeros((self.batchsize, 1 + self.nnegs, 2), dtype=int)
-            batch[:, 0] = chunk
-            for j, (u, _) in enumerate(chunk):
-                negs = self._sample_negatives(int(u))
-                batch[j, 1:, 0] = u
-                batch[j, 1:, 1] = negs
+            batch = np.zeros((self.batchsize, 2 + self.nnegs), dtype=int)
+            batch[:, 0] = chunk[:, 0]
+            batch[:, 1] = chunk[:, 1]
+            for j, (u, v_pos) in enumerate(chunk):
+                pos_context = set(chunk[chunk[:, 0] == u][:, 1].tolist())  # Tous les noeuds qui ne sont pas dans la fenêtre
+                negs = self._sample_negatives(int(u), pos_context)
+                batch[j, 2:] = negs
             yield torch.tensor(batch, dtype=torch.long)
 
         self._epoch += 1
 
+    def __len__(self):
+        return int(np.ceil(len(self.edges) / self.batch_size))
 
 
+class PrecomputeAliasEdges:
+    def __init__(self, G):
+        self.G = G
+        self._cache = {}
+    
+    def __getitem__(self, edge):
+        if edge not in self._cache:
+            self._cache[edge] = self.G.get_alias_edge(*edge)
+        return self._cache[edge]
+    
+    def __contains__(self, edge):
+        return True

@@ -136,7 +136,7 @@ class Graph():
 		'''
 		G, p, q = self.G, self.p, self.q
 
-		is_directed = self.is_directed
+		# is_directed = self.is_directed
 
 		alias_nodes = {}
 		for node in tqdm(G.nodes(), total=len(G.nodes())):
@@ -146,16 +146,27 @@ class Graph():
 			alias_nodes[node] = self.alias_setup(normalized_probs)
 
 		alias_edges = {}
-		triads = {}
-
-		if is_directed:
-			for edge in tqdm(G.edges(), total=len(G.edges())):
-				alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
-		else:
-			for edge in tqdm(G.edges(), total=len(G.edges())):
-				alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
-				alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
-
+		adj_set = {node: set(G.neighbors(node)) for node in G.nodes()}
+		for u, v in tqdm(G.edges(), total=len(G.edges())):
+			for src, dst in [(u, v), (v, u)]:
+				nbrs = sorted(G.neighbors(dst))
+				if not nbrs:  # Graphe dirigé : la racine n'a pas de voisin
+					continue
+				weights = np.array([G[dst][nbr].get('weight', 1.0) for nbr in nbrs])
+				is_src = np.array([nbr == src for nbr in nbrs])  # u ou v
+				has_edge = np.array([nbr in adj_set[src] for nbr in nbrs])
+				probs = weights.copy()
+				probs[is_src]/= p
+				probs[~is_src & ~has_edge]/= q
+				probs /= probs.sum()
+				alias_edges[(src, dst)] = self.alias_setup(probs)
+		# if is_directed:
+			# for edge in tqdm(G.edges(), total=len(G.edges())):
+				#alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
+		#else:
+			#for edge in tqdm(G.edges(), total=len(G.edges())):
+				#alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
+				#alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
 		self.alias_nodes = alias_nodes
 		self.alias_edges = alias_edges
 		return 

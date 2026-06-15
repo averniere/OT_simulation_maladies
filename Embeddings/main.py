@@ -9,7 +9,7 @@ import os
 from poincare import PoincareManifold
 from model import Distance_PE
 from RSGD import RiemanianSGD
-from batched_dataset import BatchedDataset
+from batched_dataset import BatchedDataset, BatchedDatasetNode2Vec
 from train import train
 from data import *
 from data_utils import add_corresponding_terms, add_edges
@@ -22,9 +22,9 @@ G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
 
 # --------------------------------------------------------------------------------------------
 
-objects = list(G_hpo_work.nodes())
+objects = list(G_hpo_omim.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work.edges()],dtype=np.int64)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_omim.edges()],dtype=np.int64)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
 # TEST : Fermeture transitive partielle ------------------------------------------------------
@@ -55,6 +55,10 @@ NNEGS = 100
 BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
+P = 1.0
+Q = 0.05
+WINDOW_SIZE = 10
+REFRESH = 50   # Ré-échantillonnage des positifs tous les 
 
 LR = LR0/32*BATCH_SIZE
 print(LR)
@@ -77,7 +81,9 @@ if model._log_c.requires_grad:
 else:
     c_optimizer=None 
 
-data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
+# data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
+data = BatchedDatasetNode2Vec(G_hpo_omim, True, P, Q, BATCH_SIZE, NNEGS, WINDOW_SIZE, REFRESH)
+data.preprocess_transition_probs()
 
 
 def get_dir_name(models_dir):
@@ -133,6 +139,8 @@ losses, norms = train(
         'lr': LR,
         'burnin': BURN_IN,
         'n_neg': NNEGS,
+        'num_walks': 10,
+        'walk_length': 5,
     },
     patience=50,
     early_stop=0.005,
