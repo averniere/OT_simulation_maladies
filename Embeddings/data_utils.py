@@ -51,15 +51,22 @@ def add_corresponding_terms(df1, df2, correspondances):
     hpo_cols = [c for c in df1.columns if c.startswith('HP')]
     df1_to_idx = {v: i for i, v in enumerate(df1['database_id'].values)} 
     df2_to_idx = {v: i for i, v in enumerate(df2['database_id'].values)}
-    for _, row in correspondances.iterrows():
+    mask = (
+        correspondances['omim_id'].isin(df1_to_idx) & correspondances['orpha_id'].isin(df2_to_idx)
+        )
+    valid = correspondances[mask]
+
+    hpo1 = result[hpo_cols].fillna(0).astype(int).values
+    hpo2 = df2[hpo_cols].fillna(0).astype(int).values
+    col_positions = result.columns.get_indexer(hpo_cols)
+
+    for _, row in tqdm(valid.iterrows(), total=len(valid), desc="Fusion HPO"):
         d1 = row['omim_id']
         d2 = row['orpha_id']
-        if d1 not in df1_to_idx.keys() or d2 not in df2_to_idx.keys():
-            continue
-        result.loc[d1, hpo_cols] = (
-            result.loc[d1][hpo_cols].values |
-            df2.loc[d2][hpo_cols].values
-        ).astype(int)
+        i1 = df1_to_idx[d1]
+        i2 = df2_to_idx[d2]
+        hpo1[i1] |= hpo2[i2]
+    result.iloc[:, col_positions] = hpo1
     return result
 
 
@@ -89,7 +96,7 @@ def compute_depths(objects, data):
 
 
 def f_active_terms(row, hpo_cols, node2id, deprecated):
-    active=[]
+    active = []
     for term in hpo_cols:
         if row[term]==1:
             resolved = deprecated.get(term, term)
@@ -99,9 +106,9 @@ def f_active_terms(row, hpo_cols, node2id, deprecated):
     
 
 def len_active_terms(row, hpo_cols, node2id, deprecated):
-    active=[]
+    active = []
     for term in hpo_cols:
-        if row[term]==1:
+        if row[term] == 1:
             resolved = deprecated.get(term, term)
             if resolved in node2id:
                 active.append(resolved)

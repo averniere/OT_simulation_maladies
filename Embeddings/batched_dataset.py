@@ -49,7 +49,10 @@ class BatchedDataset:
         col 2..end  = non voisins (négatifs)
     """
  
-    def __init__(self, edges, objects, nnegs, batch_size, burnin=False, depth_temperature = 1.0, max_edges_per_epoch=None):
+    def __init__(
+        self, edges, objects, nnegs, batch_size, burnin=False, 
+        depth_temperature=1.0, max_edges_per_epoch=None
+        ):
         self.edges = edges
         self.edges_arr = np.array(edges, dtype=np.int64)
         self.max_edges_per_epoch = max_edges_per_epoch
@@ -145,33 +148,11 @@ class BatchedDataset:
         pos = self.pos_neighbors[u]
         negs = []
 
-        # 1. Négatifs difficiles : proches dans l'espace des embeddings
-        # if n_hard > 0:
         if n_hard > 0 and u in self.hard_neg_pool and len(self.hard_neg_pool[u]) > 0:
             pool = self.hard_neg_pool[u]
             chosen = self.rng.choice(pool, size=min(n_hard, len(pool)), replace=False)
             negs.append(chosen)
             n_easy += n_hard - len(chosen)
-            #with torch.no_grad():
-                #u_emb = model.weight[u].unsqueeze(0)
-                #all_emb = model.weight
-                # Distance de Poincaré à tous les nœuds
-                #u_exp = u_emb.expand(self.N, -1)
-                #dists = model.manifold.distance(u_exp, all_emb, model.c).cpu().numpy()
-
-            # Masquer u et ses voisins
-            #mask = np.ones(self.N, dtype=bool)
-            #mask[u] = False
-            #for v in pos:
-                #mask[v] = False
-
-            # Trier par distance croissante → les plus proches = les plus durs
-            #dists[~mask] = np.inf
-            #hard_candidates = np.argsort(dists)[:n_hard * 3]  # top-k avec marge
-            # Sous-échantillonner parmi les hard candidates pour de la diversité
-            #chosen = self.rng.choice(hard_candidates, size=min(n_hard, len(hard_candidates)), replace=False)
-            #negs.append(chosen[:n_hard])
-
         if n_easy > 0:
             candidates = self._alias_draw(J, q, size=n_easy * 3)
             invalid = np.array([c == u or c in pos for c in candidates])
@@ -246,20 +227,3 @@ class BatchedDataset:
 
     def __len__(self):
         return int(np.ceil(len(self.edges) / self.batch_size))
-
-
-'''
-    def __iter__(self):
-        perm = np.random.permutation(len(self.edges))
-        for start in range(0, len(self.edges), self.batch_size):
-            chunk = perm[start:start + self.batch_size]
-            B = len(chunk)
-            ix = np.empty((B, 2 + self.nnegs), dtype=np.int64)
-            for j, idx in enumerate(chunk):
-                u, v  = self.edges[idx]
-                ix[j, 0] = u
-                ix[j, 1] = v
-                target_depth = self.depths[int(v)]
-                ix[j, 2:] = self._sample_neg(int(u), target_depth, self.nnegs)
-            yield torch.from_numpy(ix)
-''' 
