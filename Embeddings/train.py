@@ -1,6 +1,7 @@
 import torch
 import os
 import time
+import numpy as np
 from tqdm import tqdm
 
 
@@ -48,7 +49,7 @@ def train(
         else:
             hard_ratio = 0.5
         current_lr = lr * _lr_multiplier if data.burnin else lr/(1 + 0.001 * (epoch - burnin))
-        epoch_loss = torch.zeros(len(data))
+        epoch_loss = []
         if not node2vec:
             loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
         else:
@@ -87,9 +88,9 @@ def train(
 
             model.manifold.normalize(model.weight.data, model.c)
 
-            epoch_loss[i_batch] = loss.detach().cpu().item()
+            epoch_loss.append(loss.detach().cpu().item())
             
-        avg_loss = epoch_loss.mean().item()
+        avg_loss = np.mean(epoch_loss)
         losses.append(avg_loss)
 
         # Diagnostic 1

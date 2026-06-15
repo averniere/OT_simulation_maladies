@@ -24,7 +24,7 @@ G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
 
 objects = list(G_hpo_omim.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_omim.edges()],dtype=np.int64)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_omim.edges()],dtype=np.int32)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
 # TEST : Fermeture transitive partielle ------------------------------------------------------
@@ -43,26 +43,27 @@ def partial_transitive_closure(edges, max_depth=3):
     return list(new_edges)
 
 
-edges_closed = partial_transitive_closure(edges, max_depth=3)
-print(f"Arêtes avant : {len(edges)}, après : {len(edges_closed)}")
+# edges_closed = partial_transitive_closure(edges, max_depth=3)
+# print(f"Arêtes avant : {len(edges)}, après : {len(edges_closed)}")
 # -------------------------------------------------------------------------------------------
 
 DIM = 15
 EPOCHS = 1500
 LR0 = 0.3
 BURN_IN = 100
-NNEGS = 100
-BATCH_SIZE = 256
+NNEGS = 50
+BATCH_SIZE = 512
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 P = 1.0
 Q = 0.05
 WINDOW_SIZE = 10
-REFRESH = 50   # Ré-échantillonnage des positifs tous les 
+REFRESH = 50   # Ré-échantillonnage des positifs tous les ...
 
 LR = LR0/32*BATCH_SIZE
 print(LR)
 
+print('Modèle')
 manifold = PoincareManifold()
 model = Distance_PE(
     n=len(objects), 
@@ -81,9 +82,11 @@ if model._log_c.requires_grad:
 else:
     c_optimizer=None 
 
-# data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
-data = BatchedDatasetNode2Vec(G_hpo_omim, True, P, Q, BATCH_SIZE, NNEGS, WINDOW_SIZE, REFRESH)
-data.preprocess_transition_probs()
+data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
+print('Données')
+#data = BatchedDatasetNode2Vec(G_hpo_omim, edges, True, P, Q, BATCH_SIZE, NNEGS, WINDOW_SIZE, REFRESH)
+print('Preprocess (partly) transition probabilities')
+#data.preprocess_transition_probs()
 
 
 def get_dir_name(models_dir):
@@ -128,11 +131,12 @@ losses, norms = train(
     epochs=EPOCHS,
     lr=LR,
     device=DEVICE,
+    node2vec=False,
     burnin=BURN_IN,
     save_dir=save_dir,
     objects=objects,
     node2id=node2id,
-    edges=edges_closed,
+    edges=edges,
     hyperparams={
         'dim': DIM,
         'epochs': EPOCHS,

@@ -3,6 +3,7 @@ import random
 import torch
 import scipy
 import networkx as nx
+import time
 from collections import deque, defaultdict
 from numpy.random import default_rng
 from tqdm import tqdm
@@ -55,7 +56,7 @@ class BatchedDataset:
         depth_temperature=1.0, max_edges_per_epoch=None
         ):
         self.edges = edges
-        self.edges_arr = np.array(edges, dtype=np.int64)
+        self.edges_arr = np.array(edges, dtype=np.int32)
         self.max_edges_per_epoch = max_edges_per_epoch
         self.N = len(objects)
         self.nnegs = nnegs
@@ -87,7 +88,7 @@ class BatchedDataset:
         self.reachable = {}
         for u in range(self.N):
             reached = nx.single_source_shortest_path_length(G, u, cutoff=max_depth)
-            self.reachable[u] = np.array([v for v, d in reached.items() if d > 0], dtype=np.int64)
+            self.reachable[u] = np.array([v for v, d in reached.items() if d > 0], dtype=np.int32)
 
     def _build_hard_neg_candidates(self, edges, max_depth=2):
         G = nx.DiGraph()
@@ -220,8 +221,9 @@ class BatchedDataset:
 
 
 class BatchedDatasetNode2Vec:
-    def __init__(self, nx_G, is_directed, p, q, batchsize, nnegs, window_size, refresh_every):
+    def __init__(self, nx_G, edges, is_directed, p, q, batchsize, nnegs, window_size, refresh_every):
         self.G = nx_G
+        self.edges = edges
         self.is_directed = is_directed
         self.p = p
         self.q = q
@@ -302,7 +304,7 @@ class BatchedDatasetNode2Vec:
         G, p, q = self.G, self.p, self.q
         probs = []
         for nbr in sorted(G.neighbors(dst)):
-            w = G[dst][nbr]['weight']
+            w = G[dst][nbr].get('weight', 1.0)
             if nbr == src:
                 probs.append(w / p)
             elif G.has_edge(nbr, src):
@@ -313,7 +315,7 @@ class BatchedDatasetNode2Vec:
         return self.alias_setup([x / s for x in probs])
     
     def preprocess_transition_probs(self):
-        G = self.G, self.is_directed
+        G = self.G
         alias_nodes = {}
         for node in tqdm(G.nodes(), total=len(G.nodes())):
             probs = [G[node][nbr].get('weight', 1.0) for nbr in sorted(G.neighbors(node))]
@@ -361,32 +363,25 @@ class BatchedDatasetNode2Vec:
                     break
         return np.array(negs[:self.nnegs], dtype=int)
 
-    def _build_batch(self, pairs: np.ndarray) -> torch.Tensor:
-        idx = self.rng.choice(len(pairs), size=self.batchsize, replace=False)
-        selected = pairs[idx]          # (B, 2)
-        batch = np.zeros((self.batchsize, 1 + self.nnegs, 2), dtype=np.int32)
-        batch[:, 0] = selected         # positifs
-        for i, (u, _) in enumerate(selected):
-            negs = self._sample_negatives(int(u))
-            batch[i, 1:, 0] = u        # même source
-            batch[i, 1:, 1] = negs
-        return torch.tensor(batch, dtype=torch.long)
-
     def epoch_batches(self, num_walks: int, walk_length: int):
         """
         Yield des tenseurs de taille (B, 1+nnegs) pour une epoch contenant chaque noeud positif
         et ces noeuds négatifs associés.
         Recalcule les paires si nécessaire (premier appel ou refresh).
         """
+        t0 = time.time()
         if self._active_pairs is None or self._epoch % self.refresh == 0:
             walks = self.simulate_walks(num_walks, walk_length, verbose=False)
             self._active_pairs = self._walks_to_pairs(walks)
+        print(f"Walks : {time.time()-t0:.1f}s")
         
         pairs = self._active_pairs
         n_batches = len(pairs) // self.batchsize
+        print(n_batches)
         perm = self.rng.permutation(len(pairs))
         pairs = pairs[perm]
 
+        t0 = time.time()
         for i in range(n_batches):
             chunk = pairs[i * self.batchsize:(i + 1) * self.batchsize]
             batch = np.zeros((self.batchsize, 2 + self.nnegs), dtype=int)
@@ -397,11 +392,12 @@ class BatchedDatasetNode2Vec:
                 negs = self._sample_negatives(int(u), pos_context)
                 batch[j, 2:] = negs
             yield torch.tensor(batch, dtype=torch.long)
+        print(f"Batche : {time.time()-t0:.1f}s")
 
         self._epoch += 1
 
     def __len__(self):
-        return int(np.ceil(len(self.edges) / self.batch_size))
+        return int(np.ceil(len(self.edges) / self.batchsize))
 
 
 class PrecomputeAliasEdges:
