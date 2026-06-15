@@ -56,8 +56,8 @@ def add_corresponding_terms(df1, df2, correspondances):
         )
     valid = correspondances[mask]
 
-    hpo1 = result[hpo_cols].fillna(0).astype(int).values
-    hpo2 = df2[hpo_cols].fillna(0).astype(int).values
+    hpo1 = result[hpo_cols].fillna(0).astype(int).values.copy()
+    hpo2 = df2[hpo_cols].fillna(0).astype(int).values.copy()
     col_positions = result.columns.get_indexer(hpo_cols)
 
     for _, row in tqdm(valid.iterrows(), total=len(valid), desc="Fusion HPO"):

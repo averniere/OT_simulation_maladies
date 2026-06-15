@@ -227,3 +227,188 @@ class BatchedDataset:
 
     def __len__(self):
         return int(np.ceil(len(self.edges) / self.batch_size))
+
+
+class BatchedDatasetNode2Vec:
+    def __init__(self, nx_G, is_directed, p, q, batchsize, nnegs, window_size, refresh_every):
+        self.G = nx_G
+        self.is_directed = is_directed
+        self.p = p
+        self.q = q
+        self.batchsize = batchsize
+        self.nnegs = nnegs
+        self.window_size = window_size
+        self.refresh = refresh_every
+
+        self.nodes = sorted(nx_G.nodes())
+        self.node2idx = {n: i for i, n in enumerate(self.nodes)}
+        self.N = len(self.nodes)
+
+        # Voisins positifs indexés (pour exclure du sampling négatif)
+        self.pos_neighbors: list[set] = [set() for _ in range(self.N)]
+        for u, v in nx_G.edges():
+            ui, vi = self.node2idx[u], self.node2idx[v]
+            self.pos_neighbors[ui].add(vi)
+            if not is_directed:
+                self.pos_neighbors[vi].add(ui)
+
+        self.rng = np.random.default_rng()
+        self._epoch = 0
+        self._active_pairs: np.ndarray | None = None
+    
+    @staticmethod
+    def alias_setup(probs):
+        K = len(probs)
+        q = np.zeros(K)
+        J = np.zeros(K, dtype=int)
+        smaller, larger = [], []
+        for kk, prob in enumerate(probs):
+            q[kk] = K * prob
+            (smaller if q[kk] < 1.0 else larger).append(kk)
+        while smaller and larger:
+            small = smaller.pop()
+            large = larger.pop()
+            J[small] = large
+            q[large] = q[large] + q[small] - 1.0
+            (smaller if q[large] < 1.0 else larger).append(large)
+        return J, q
+
+    @staticmethod
+    def alias_draw(J, q):
+        K = len(J)
+        kk = int(np.floor(np.random.rand() * K))
+        return kk if np.random.rand() < q[kk] else J[kk]
+
+    def node2vec_walk(self, walk_length, start_node):
+        G = self.G
+        alias_nodes = self.alias_nodes
+        alias_edges = self.alias_edges
+        walk = [start_node]
+        while len(walk) < walk_length:
+            cur = walk[-1]
+            cur_nbrs = sorted(G.neighbors(cur))
+            if not cur_nbrs:
+                break
+            if len(walk) == 1:
+                idx = self.alias_draw(*alias_nodes[cur])
+            else:
+                prev = walk[-2]
+                idx = self.alias_draw(*alias_edges[(prev, cur)])
+            walk.append(cur_nbrs[idx])
+        return walk
+
+    def simulate_walks(self, num_walks, walk_length, verbose=True):
+        walks = []
+        nodes = list(self.G.nodes())
+        for i in range(num_walks):
+            if verbose:
+                print(f"Walk {i+1}/{num_walks}")
+            random.shuffle(nodes)
+            for node in nodes:
+                walks.append(self.node2vec_walk(walk_length, node))
+        return walks
+    
+    def get_alias_edge(self, src, dst):
+        G, p, q = self.G, self.p, self.q
+        probs = []
+        for nbr in sorted(G.neighbors(dst)):
+            w = G[dst][nbr]['weight']
+            if nbr == src:
+                probs.append(w / p)
+            elif G.has_edge(nbr, src):
+                probs.append(w)
+            else:
+                probs.append(w / q)
+        s = sum(probs)
+        return self.alias_setup([x / s for x in probs])
+    
+    def preprocess_transition_probs(self):
+        G, is_directed = self.G, self.is_directed
+        alias_nodes = {}
+        for node in G.nodes():
+            probs = [G[node][nbr]['weight'] for nbr in sorted(G.neighbors(node))]
+            s = sum(probs)
+            alias_nodes[node] = self.alias_setup([x / s for x in probs])
+
+        alias_edges = {}
+        for edge in G.edges():
+            alias_edges[edge] = self.get_alias_edge(*edge)
+            if not is_directed:
+                alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
+
+        self.alias_nodes = alias_nodes
+        self.alias_edges = alias_edges
+
+    def _walks_to_pairs(self, walks):
+        """
+        Extrait toutes les paires (centre, contexte) pour construire un ensemble
+        de paires positives (parmi lesquelles ne pas tirer de négatif).
+        """
+        pairs = []
+        W = self.window_size
+        for walk in walks:
+            walk_idx = [self.node2idx[n] for n in walk]
+            L = len(walk_idx)
+            for i, u in enumerate(walk_idx):
+                lo = max(0, i - W)
+                hi = min(L, i + W + 1)
+                for j in range(lo, hi):
+                    if j != i:
+                        pairs.append((u, walk_idx[j]))
+        return np.array(pairs, dtype=int)
+
+    def _sample_negatives(self, u: int):
+        """
+        Tire nnegs indices négatifs pour le nœud u.
+        Exclut les voisins positifs et u lui-même.
+        """
+        excluded = self.pos_neighbors[u] | {u}
+        negs = []
+        while len(negs) < self.nnegs:
+            candidates = self.rng.integers(0, self.N, size=self.nnegs * 3)
+            for c in candidates:
+                if c not in excluded:
+                    negs.append(c)
+                if len(negs) == self.nnegs:
+                    break
+        return np.array(negs[:self.nnegs], dtype=int)
+
+    def _build_batch(self, pairs: np.ndarray) -> torch.Tensor:
+        idx = self.rng.choice(len(pairs), size=self.batchsize, replace=False)
+        selected = pairs[idx]          # (B, 2)
+        batch = np.zeros((self.batchsize, 1 + self.nnegs, 2), dtype=np.int32)
+        batch[:, 0] = selected         # positifs
+        for i, (u, _) in enumerate(selected):
+            negs = self._sample_negatives(int(u))
+            batch[i, 1:, 0] = u        # même source
+            batch[i, 1:, 1] = negs
+        return torch.tensor(batch, dtype=torch.long)
+
+    def epoch_batches(self, num_walks: int, walk_length: int):
+        """
+        Yield des tenseurs de shape (B, 1+nnegs, 2) pour une epoch.
+        Recalcule les paires si nécessaire (premier appel ou refresh).
+        """
+        if self._active_pairs is None or self._epoch % self.refresh == 0:
+            walks = self.simulate_walks(num_walks, walk_length, verbose=False)
+            self._active_pairs = self._walks_to_pairs(walks)
+        
+        pairs = self._active_pairs
+        n_batches = len(pairs) // self.batchsize
+        perm = self.rng.permutation(len(pairs))
+        pairs = pairs[perm]
+
+        for i in range(n_batches):
+            chunk = pairs[i * self.batchsize:(i + 1) * self.batchsize]
+            batch = np.zeros((self.batchsize, 1 + self.nnegs, 2), dtype=int)
+            batch[:, 0] = chunk
+            for j, (u, _) in enumerate(chunk):
+                negs = self._sample_negatives(int(u))
+                batch[j, 1:, 0] = u
+                batch[j, 1:, 1] = negs
+            yield torch.tensor(batch, dtype=torch.long)
+
+        self._epoch += 1
+
+
+

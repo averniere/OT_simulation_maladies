@@ -2,6 +2,7 @@ import numpy as np
 import networkx as nx
 import random
 
+from tqdm import tqdm
 from gensim.models import Word2Vec
 from data import *
 from data_utils import add_corresponding_terms, add_edges
@@ -33,7 +34,7 @@ class Graph():
 	def alias_setup(probs):
 		K = len(probs)
 		q = np.zeros(K)
-		J = np.zeros(K, dtype=np.int)
+		J = np.zeros(K, dtype=int)
 		smaller = []
 		larger = []
 		for kk, prob in enumerate(probs):
@@ -80,11 +81,10 @@ class Graph():
 			cur_nbrs = sorted(G.neighbors(cur))
 			if len(cur_nbrs) > 0:
 				if len(walk) == 1:
-					walk.append(cur_nbrs[alias_draw(alias_nodes[cur][0], alias_nodes[cur][1])])
+					walk.append(cur_nbrs[self.alias_draw(alias_nodes[cur][0], alias_nodes[cur][1])])
 				else:
 					prev = walk[-2]
-					next = cur_nbrs[self.alias_draw(alias_edges[(prev, cur)][0], 
-						alias_edges[(prev, cur)][1])]
+					next = cur_nbrs[self.alias_draw(alias_edges[(prev, cur)][0], alias_edges[(prev, cur)][1])]
 					walk.append(next)
 			else:
 				break
@@ -120,11 +120,11 @@ class Graph():
 		unnormalized_probs = []
 		for dst_nbr in sorted(G.neighbors(dst)):
 			if dst_nbr == src:
-				unnormalized_probs.append(G[dst][dst_nbr]['weight']/p)
+				unnormalized_probs.append(G[dst][dst_nbr].get('weight', 1.0)/p)
 			elif G.has_edge(dst_nbr, src):
-				unnormalized_probs.append(G[dst][dst_nbr]['weight'])
+				unnormalized_probs.append(G[dst][dst_nbr].get('weight', 1.0))
 			else:
-				unnormalized_probs.append(G[dst][dst_nbr]['weight']/q)
+				unnormalized_probs.append(G[dst][dst_nbr].get('weight', 1.0)/q)
 		norm_const = sum(unnormalized_probs)
 		normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
 
@@ -134,24 +134,25 @@ class Graph():
 		'''
 		Preprocessing of transition probabilities for guiding the random walks.
 		'''
-		G = self.G
+		G, p, q = self.G, self.p, self.q
+
 		is_directed = self.is_directed
 
 		alias_nodes = {}
-		for node in G.nodes():
-			unnormalized_probs = [G[node][nbr]['weight'] for nbr in sorted(G.neighbors(node))]
+		for node in tqdm(G.nodes(), total=len(G.nodes())):
+			unnormalized_probs = [G[node][nbr].get('weight', 1.0) for nbr in sorted(G.neighbors(node))]
 			norm_const = sum(unnormalized_probs)
-			normalized_probs =  [float(u_prob)/norm_const for u_prob in unnormalized_probs]
+			normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
 			alias_nodes[node] = self.alias_setup(normalized_probs)
 
 		alias_edges = {}
 		triads = {}
 
 		if is_directed:
-			for edge in G.edges():
+			for edge in tqdm(G.edges(), total=len(G.edges())):
 				alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
 		else:
-			for edge in G.edges():
+			for edge in tqdm(G.edges(), total=len(G.edges())):
 				alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
 				alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
 
@@ -180,7 +181,9 @@ ITER = 1 # SGD epochs
 
 # Preprocessing, generate walks
 g_n2v = Graph(G_hpo_omim, DIRECTED, P, Q)
+print('Preprocess transition probs')
 g_n2v.preprocess_transition_probs()
+print('Simulate walks')
 walks = g_n2v.simulate_walks(NUM_WALKS, WALK_LENGTH)
 walks = [list(map(str, walk)) for walk in walks]
 
