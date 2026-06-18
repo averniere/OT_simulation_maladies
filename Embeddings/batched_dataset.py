@@ -4,9 +4,11 @@ import torch
 import scipy
 import networkx as nx
 import time
-from collections import deque, defaultdict
-from numpy.random import default_rng
+import numba
 from tqdm import tqdm
+from collections import deque
+from scipy.sparse import csr_matrix
+from numpy.random import default_rng
 
 
 def compute_depths(edge_index, num_nodes):
@@ -52,7 +54,7 @@ class BatchedDataset:
     """
  
     def __init__(
-        self, edges, objects, nnegs, batch_size, burnin=False, 
+        self, edges, objects, nnegs, batch_size, pos_neighbors, burnin=False, 
         depth_temperature=1.0, max_edges_per_epoch=None
         ):
         self.edges = edges
@@ -66,12 +68,13 @@ class BatchedDataset:
         self.rng = default_rng()
  
         # Voisins
-        self.pos_neighbors = [set() for _ in range(self.N)]
-        counts = np.zeros(self.N, dtype=np.float64)
-        for u, v in edges:
-            self.pos_neighbors[int(u)].add(int(v))
-            counts[int(v)] += 1.0    
-        self.pos_neighbors_arr = [np.array(list(s), dtype=np.int64) for s in self.pos_neighbors]
+        #self.pos_neighbors = [set() for _ in range(self.N)]
+        #counts = np.zeros(self.N, dtype=np.float64)
+        #for u, v in edges:
+            #self.pos_neighbors[int(u)].add(int(v))
+            #counts[int(v)] += 1.0    
+        self.pos_neighbors = pos_neighbors
+        self.pos_neighbors_arr = [np.array(list(s), dtype=np.int32) for s in self.pos_neighbors]
         rows = self.edges_arr[:, 0]
         cols = self.edges_arr[:, 1]
         self.pos_matrix = scipy.sparse.csr_matrix((np.ones(len(rows), dtype=bool), (rows, cols)), shape=(self.N, self.N))
@@ -80,15 +83,7 @@ class BatchedDataset:
         edge_index = torch.tensor(edges, dtype=torch.long).T
         self.depths = compute_depths(edge_index, self.N).numpy()
         self._build_alias_tables()
-        self._build_reachable()
 
-    def _build_reachable(self, max_depth=2):
-        G = nx.DiGraph()
-        G.add_edges_from(self.edges_arr)
-        self.reachable = {}
-        for u in range(self.N):
-            reached = nx.single_source_shortest_path_length(G, u, cutoff=max_depth)
-            self.reachable[u] = np.array([v for v, d in reached.items() if d > 0], dtype=np.int32)
 
     def _build_hard_neg_candidates(self, edges, max_depth=2):
         G = nx.DiGraph()
@@ -134,13 +129,11 @@ class BatchedDataset:
 
         return J, q
 
-
     def _alias_draw(self, J, q, size):
         """Tirage vectorisé O(size) grâce à la alias table."""
         k = self.rng.integers(0, self.N, size=size)
         r = self.rng.random(size=size)
         return np.where(r < q[k], k, J[k])
-
 
     def _sample_neg(self, u, target_depth, nnegs, model=None, hard_ratio=0.5):
 
@@ -247,64 +240,21 @@ class BatchedDatasetNode2Vec:
         self.rng = np.random.default_rng()
         self._epoch = 0
         self._active_pairs: np.ndarray | None = None
-    
-    @staticmethod
-    def alias_setup(probs):
-        K = len(probs)
-        q = np.zeros(K)
-        J = np.zeros(K, dtype=int)
-        smaller, larger = [], []
-        for kk, prob in enumerate(probs):
-            q[kk] = K * prob
-            (smaller if q[kk] < 1.0 else larger).append(kk)
-        while smaller and larger:
-            small = smaller.pop()
-            large = larger.pop()
-            J[small] = large
-            q[large] = q[large] + q[small] - 1.0
-            (smaller if q[large] < 1.0 else larger).append(large)
-        return J, q
 
-    @staticmethod
-    def alias_draw(J, q):
-        K = len(J)
-        kk = int(np.floor(np.random.rand() * K))
-        return kk if np.random.rand() < q[kk] else J[kk]
+        adj = nx.to_scipy_sparse_array(nx_G, nodelist=self.nodes, format='csr')
+        self.indptr = adj.indptr.astype(np.int32)
+        self.indices = adj.indices.astype(np.int32)
 
-    def node2vec_walk(self, walk_length, start_node):
-        G = self.G
-        alias_nodes = self.alias_nodes
-        alias_edges = self.alias_edges
-        walk = [start_node]
-        while len(walk) < walk_length:
-            cur = walk[-1]
-            cur_nbrs = sorted(G.neighbors(cur))
-            if not cur_nbrs:
-                break
-            if len(walk) == 1:
-                idx = self.alias_draw(*alias_nodes[cur])
-            else:
-                prev = walk[-2]
-                idx = self.alias_draw(*alias_edges[(prev, cur)])
-            walk.append(cur_nbrs[idx])
-        return walk
-
-    def simulate_walks(self, num_walks, walk_length, verbose=True):
-        walks = []
-        nodes = list(self.G.nodes())
-        for i in range(num_walks):
-            if verbose:
-                print(f"Walk {i+1}/{num_walks}")
-            random.shuffle(nodes)
-            for node in nodes:
-                walks.append(self.node2vec_walk(walk_length, node))
+    def simulate_walks(self, num_walks, walk_length):
+        walks = node2vec_walk(self.indptr, self.indices, self.p, self.q, walk_length, num_walks, self.N)
         return walks
     
     def get_alias_edge(self, src, dst):
         G, p, q = self.G, self.p, self.q
         probs = []
-        for nbr in sorted(G.neighbors(dst)):
-            w = G[dst][nbr].get('weight', 1.0)
+        dst_neighbors = self.indices[self.indptr[dst]:self.indptr[dst+1]]
+        for nbr in dst_neighbors:
+            w = 1.0
             if nbr == src:
                 probs.append(w / p)
             elif G.has_edge(nbr, src):
@@ -312,40 +262,64 @@ class BatchedDatasetNode2Vec:
             else:
                 probs.append(w / q)
         s = sum(probs)
-        return self.alias_setup([x / s for x in probs])
+        return alias_setup(np.array([x / s for x in probs], dtype=np.float32))
     
+    '''
     def preprocess_transition_probs(self):
-        G = self.G
-        alias_nodes = {}
-        for node in tqdm(G.nodes(), total=len(G.nodes())):
-            probs = [G[node][nbr].get('weight', 1.0) for nbr in sorted(G.neighbors(node))]
+        n = self.N
+        max_deg = max(self.indptr[i+1] - self.indptr[i] for i in range(n))
+        self.alias_nodes_J = np.zeros((n, max_deg), dtype=np.int32)
+        self.alias_nodes_q = np.zeros((n, max_deg), dtype=np.float32)
+        for i in range(n):
+            nbrs = self.indices[self.indptr[i]:self.indptr[i+1]]
+            if len(nbrs) == 0:
+                continue
+            probs = np.ones(len(nbrs))  # A remplacer si les arêtes possèdent des poids
             s = sum(probs)
-            alias_nodes[node] = self.alias_setup([x / s for x in probs])
-        self.alias_nodes = alias_nodes
-        self.alias_edges = PrecomputeAliasEdges(self)
+            #alias_nodes[node] = self.alias_setup([x / s for x in probs])
+            probs /= s
+            J, q = alias_setup(probs)
+            self.alias_nodes_J[i, :len(J)] = J
+            self.alias_nodes_q[i, :len(q)] = q
+        self.alias_edges_J = np.zeros((len(self.indices), max_deg), dtype=np.int32)
+        self.alias_edges_q = np.zeros((len(self.indices), max_deg), dtype=np.float32)
+        for src in tqdm(range(n)):
+            for k, dst in enumerate(self.indices[self.indptr[src]:self.indptr[src+1]]):
+                edge_idx = self.indptr[src] + k  # position unique de l'arête
+                J, q = self.get_alias_edge(src, dst)
+                d = self.indptr[dst+1] - self.indptr[dst]
+                self.alias_edges_J[edge_idx, :len(J)] = J
+                self.alias_edges_q[edge_idx, :len(q)] = q
+        #self.alias_nodes = alias_nodes
+        #self.alias_edges = PrecomputeAliasEdges(self)
             #alias_edges[edge] = self.get_alias_edge(*edge)
             #if not is_directed:
                 #alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
 
         # self.alias_edges = alias_edges
-
+    '''
+    
     def _walks_to_pairs(self, walks):
         """
         Extrait toutes les paires (centre, contexte) pour construire un ensemble
         de paires positives (parmi lesquelles ne pas tirer de négatif).
         """
         pairs = []
+        n_walks, L = walks.shape
         W = self.window_size
-        for walk in walks:
-            walk_idx = [self.node2idx[n] for n in walk]
-            L = len(walk_idx)
-            for i, u in enumerate(walk_idx):
+        for w in range(n_walks):
+            walk = walks[w]
+            # walk_idx = [self.node2idx[n] for n in walk]
+            # L = len(walk_idx)
+            for i in range(L):
+                if walk[i]==-1:
+                    break
                 lo = max(0, i - W)
                 hi = min(L, i + W + 1)
                 for j in range(lo, hi):
-                    if j != i:
-                        pairs.append((u, walk_idx[j]))
-        return np.array(pairs, dtype=int)
+                    if j != i and walk[j] != -1:
+                        pairs.append((walk[i], walk[j]))
+        return np.array(pairs, dtype=np.int32)
 
     def _sample_negatives(self, u: int, positive_context):
         """
@@ -361,7 +335,7 @@ class BatchedDatasetNode2Vec:
                     negs.append(c)
                 if len(negs) == self.nnegs:
                     break
-        return np.array(negs[:self.nnegs], dtype=int)
+        return np.array(negs[:self.nnegs], dtype=np.int32)
 
     def epoch_batches(self, num_walks: int, walk_length: int):
         """
@@ -369,22 +343,22 @@ class BatchedDatasetNode2Vec:
         et ces noeuds négatifs associés.
         Recalcule les paires si nécessaire (premier appel ou refresh).
         """
+        print("Appel epoch_batches")
         t0 = time.time()
         if self._active_pairs is None or self._epoch % self.refresh == 0:
-            walks = self.simulate_walks(num_walks, walk_length, verbose=False)
+            walks = self.simulate_walks(num_walks, walk_length)
             self._active_pairs = self._walks_to_pairs(walks)
         print(f"Walks : {time.time()-t0:.1f}s")
         
         pairs = self._active_pairs
         n_batches = len(pairs) // self.batchsize
-        print(n_batches)
         perm = self.rng.permutation(len(pairs))
         pairs = pairs[perm]
 
         t0 = time.time()
         for i in range(n_batches):
             chunk = pairs[i * self.batchsize:(i + 1) * self.batchsize]
-            batch = np.zeros((self.batchsize, 2 + self.nnegs), dtype=int)
+            batch = np.zeros((self.batchsize, 2 + self.nnegs), dtype=np.int32)
             batch[:, 0] = chunk[:, 0]
             batch[:, 1] = chunk[:, 1]
             for j, (u, v_pos) in enumerate(chunk):
@@ -398,6 +372,95 @@ class BatchedDatasetNode2Vec:
 
     def __len__(self):
         return int(np.ceil(len(self.edges) / self.batchsize))
+
+
+@numba.njit(parallel=True)
+def node2vec_walk(
+    indptr, indices, p, q, # alias_nodes_J, alias_nodes_q, alias_edges_J, alias_edges_q, alias_edge_keys, 
+    walk_length, num_walks, N
+    ):
+    total_walks = num_walks *N
+    print(total_walks)
+    walk = np.full((total_walks, walk_length), -1, dtype=np.int32)
+    for w in numba.prange(total_walks):
+        start = w % N
+        walk[w, 0] = start
+        cur = start
+        # while len(walk) < walk_length:
+        for step in range(1, walk_length):
+            cur_nbrs = indices[indptr[cur]:indptr[cur+1]]
+            if len(cur_nbrs)==0:
+                break
+            if step == 1:
+                # idx = alias_draw(alias_nodes_J[cur], alias_nodes_q[cur])
+                idx = np.int32(np.floor(np.random.rand() * len(cur_nbrs)))
+            else:
+                prev = walk[w, step-2]
+                prev_nbrs = indices[indptr[prev]:indptr[prev+1]]
+                probs = np.empty(len(cur_nbrs), dtype=np.float32)
+                for k in range(len(cur_nbrs)):
+                    nbr = cur_nbrs[k]
+                    if nbr == prev:
+                        probs[k] = np.float32(1.0/p)
+                    elif _isin_sorted(prev_nbrs, nbr):
+                        probs[k] = np.float32(1.0)
+                    else:
+                        probs[k] = np.float32(1.0/q)
+                probs /= probs.sum()
+                J, q_arr = alias_setup(probs)
+                idx = alias_draw(J, q_arr)
+            cur = cur_nbrs[idx]
+            walk[w, step] = cur
+            # edge_idx = find_edge_idx(indptr, indices, prev, cur)
+            # idx = alias_draw(alias_edges_J[edge_idx], alias_edges_q[edge_idx])
+    return walk
+
+
+@numba.njit
+def _isin_sorted(arr, val):
+    l, h = 0, len(arr) - 1
+    while l <= h:
+        mid = (l + h) // 2
+        if arr[mid] == val:
+            return True
+        elif arr[mid] < val:
+            l = mid + 1
+        else:
+            h = mid - 1
+    return False
+
+
+@numba.njit
+def alias_draw(J, q):
+    K = len(J)
+    kk = int(np.floor(np.random.rand() * K))
+    return kk if np.random.rand() < q[kk] else J[kk]
+
+
+@numba.njit
+def alias_setup(probs):
+    K = len(probs)
+    q = np.zeros(K, dtype=np.float32)
+    J = np.zeros(K, dtype=np.int32)
+    smaller, larger = numba.typed.List.empty_list(numba.int32), numba.typed.List.empty_list(numba.int32)
+    for kk in range(K):
+        q[kk] = K * probs[kk]
+        (smaller if q[kk] < 1.0 else larger).append(kk)
+    while smaller and larger:
+        small = smaller.pop()
+        large = larger.pop()
+        J[small] = large
+        q[large] = q[large] + q[small] - 1.0
+        (smaller if q[large] < 1.0 else larger).append(large)
+    return J, q
+
+
+@numba.njit
+def find_edge_idx(indptr, indices, src, dst):
+    for k in range(indptr[src], indptr[src+1]):
+        if indices[k] == dst:
+            return k
+    return -1
 
 
 class PrecomputeAliasEdges:

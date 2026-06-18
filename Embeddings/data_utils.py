@@ -115,6 +115,24 @@ def len_active_terms(row, hpo_cols, node2id, deprecated):
     return len(active)
 
 
+def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
+    omim_to_idx = {v: i for i, v in enumerate(work_omim['database_id'].values)} 
+    orpha_to_idx = {v: i for i, v in enumerate(work_orpha['database_id'].values)}
+
+    ground_truth = []
+    valid_omim = []
+    valid_orpha = []
+    for _, row in df_orpha_omim.iterrows():
+        if row['omim_id'] in omim_to_idx and row['orpha_id'] in orpha_to_idx:
+            i = omim_to_idx[row['omim_id']]
+            j = orpha_to_idx[row['orpha_id']]
+            ground_truth.append((i, j))
+            valid_omim.append(row['omim_id'])
+            valid_orpha.append(row['orpha_id'])
+    gt_set = set(ground_truth)
+    return gt_set, valid_omim, valid_orpha
+
+
 def build_disease_correspondence(df):
     """
     Construit une table de correspondance OMIM <-> ORPHA basée sur le nom des maladies.

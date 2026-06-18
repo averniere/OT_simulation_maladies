@@ -58,7 +58,6 @@ def train(
                 total=len(data._active_pairs) // data.batchsize if data._active_pairs is not None else None,
                 desc=f"Epoch {epoch+1}/{epochs}"
                 )
-
         # tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
 
         for i_batch, inputs in enumerate(loader):
@@ -67,10 +66,10 @@ def train(
             inputs = inputs.to(device)
             targets = torch.zeros(inputs.size(0), dtype=torch.long)
             targets = targets.to(device)
-
+        
             optimizer.zero_grad()
             preds = model(inputs)
-
+            
             u = preds[:, 0, :]   # (B, dim)
             others = preds[:, 1:, :]  # (B, v+nnegs, dim)
             u_exp = u.unsqueeze(1).expand_as(others)

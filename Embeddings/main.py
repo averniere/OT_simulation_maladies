@@ -9,23 +9,36 @@ import os
 from poincare import PoincareManifold
 from model import Distance_PE
 from RSGD import RiemanianSGD
-from batched_dataset import BatchedDataset, BatchedDatasetNode2Vec
+from batched_dataset import *
 from train import train
 from data import *
 from data_utils import add_corresponding_terms, add_edges
+from information_content import *
+from OT_utils import *
 
 
 # TEST : on relie les termes présents dans une même maladie ----------------------------------
 
 union_diseases = add_corresponding_terms(work_omim, work_orpha, df_orpha_omim)
 G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
+# Cas particulier : on relie manuellement le noeud à son parent dans le sens enfant-parent
+G_hpo_omim.add_edge('HP:6001347', 'HP:0001832')
 
 # --------------------------------------------------------------------------------------------
 
-objects = list(G_hpo_omim.nodes())
+objects_omim = list(G_hpo_omim.nodes())
+node2id_omim = {n: i for i, n in enumerate(objects_omim)}
+edges_omim = np.array([(node2id_omim[u], node2id_omim[v]) for u, v in G_hpo_omim.edges()],dtype=np.int32)
+print(f"{len(edges_omim)} arêtes et {len(objects_omim)} noeuds")
+
+objects = list(G_hpo_work.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_omim.edges()],dtype=np.int32)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work.edges()],dtype=np.int32)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
+
+pos_neighbors = [set() for _ in range(len(objects_omim))]
+for u, v in edges_omim:
+    pos_neighbors[int(u)].add(int(v))
 
 # TEST : Fermeture transitive partielle ------------------------------------------------------
 def partial_transitive_closure(edges, max_depth=3):
@@ -52,7 +65,7 @@ EPOCHS = 1500
 LR0 = 0.3
 BURN_IN = 100
 NNEGS = 50
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 P = 1.0
@@ -82,11 +95,11 @@ if model._log_c.requires_grad:
 else:
     c_optimizer=None 
 
-data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE)
 print('Données')
+data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE, pos_neighbors=pos_neighbors)
 #data = BatchedDatasetNode2Vec(G_hpo_omim, edges, True, P, Q, BATCH_SIZE, NNEGS, WINDOW_SIZE, REFRESH)
-print('Preprocess (partly) transition probabilities')
-#data.preprocess_transition_probs()
+# print('Preprocess (partly) transition probabilities')
+# data.preprocess_transition_probs()
 
 
 def get_dir_name(models_dir):
@@ -124,6 +137,7 @@ models_dir = os.path.join("logs/", date)
 save_dir = get_dir_name(models_dir)
 
 
+print("Début de l'entraînement")
 losses, norms = train(
     model=model,
     data=data,
@@ -150,58 +164,3 @@ losses, norms = train(
     early_stop=0.005,
     c_optimizer=c_optimizer
 )
-
-
-# Diagnostic 3
-def visualize_training(model, losses, norm_history, objects, node2id, lr, burnin):
-
-    W = model.weight.detach().cpu().numpy()
-    norms = np.linalg.norm(W, axis=1)
-    
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    
-    # ── 1. Disque de Poincaré ─────────────────────────────────────────
-    ax = axes[0]
-    ax.add_patch(plt.Circle((0,0), 1.0, color='gray', fill=False, lw=1.5, ls='--'))
-    sc = ax.scatter(W[:,0], W[:,1], c=norms, cmap='plasma',
-                    s=10, alpha=0.7, vmin=0, vmax=1)
-    plt.colorbar(sc, ax=ax, label='‖θ‖')
-    ax.scatter(W[0,0], W[0,1], c='red', s=10, alpha=0.7, edgecolors='black', linewidth=0.5)
-    ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.1, 1.1)
-    ax.set_aspect('equal')
-    ax.set_title(f'Embeddings finaux\nnorme max={norms.max():.3f}  moy={norms.mean():.3f}')
-
-    # ── 2. Évolution des normes ───────────────────────────────────────
-    ax = axes[1]
-    ax.plot([h['mean'] for h in norm_history], label='moyenne', color='steelblue')
-    ax.plot([h['max']  for h in norm_history], label='max',     color='tomato')
-    ax.plot([h['min']  for h in norm_history], label='min',     color='green')
-    ax.axvline(burnin, color='orange', ls='--', label=f'fin burn-in ({burnin})')
-    ax.set_xlabel('Epoch'); ax.set_ylabel('‖θ‖')
-    ax.set_title('Évolution des normes')
-    ax.legend(); ax.grid(alpha=0.3)
-
-    # ── 3. Loss ───────────────────────────────────────────────────────
-    ax = axes[2]
-    ax.plot(losses, color='steelblue', lw=2)
-    ax.axvline(burnin, color='orange', ls='--', label=f'fin burn-in ({burnin})')
-    ax.set_xlabel('Epoch'); ax.set_ylabel('Loss')
-    ax.set_title('Courbe de loss')
-    ax.legend(); ax.grid(alpha=0.3)
-
-    plt.suptitle(
-        f'Run — {len(objects)} nœuds | dim={W.shape[1]} | lr ={lr} |'
-        f'{len(losses)} epochs| batch_size ={BATCH_SIZE}',
-        fontsize=12, y=1.02
-    )
-    plt.tight_layout()
-    
-    from datetime import datetime
-    fname = f"plots/poincare_{datetime.now().strftime('%H%M%S')}.png"
-    plt.savefig(fname, dpi=150, bbox_inches='tight')
-    print(f"Figure sauvegardée : {fname}")
-    plt.show()
-    
-    return fig
-
-visualize_training(model, losses, norms, objects, node2id, lr=LR, burnin=BURN_IN)
