@@ -1,16 +1,16 @@
 import networkx as nx
 import numpy as np
-import pandas as pd
 from collections import deque
 from data import *
 from information_content import get_ancestors0, compute_information_content
-ancestors = {hp : get_ancestors0(G_hpo_work, hp) for hp in hpo_cols0}
+
 
 class tsw:
     def __init__(self, G, weights, root='HP:0000001'):
         '''
         G : G_hpo_work (orienté dans le sens enfant --> parent)
-        weights : pondérations des arêtes, soit uniforme, soit avec l'ic, soit avec les profondeurs.
+        weights : pondérations des arêtes, soit uniforme, soit avec l'ic, soit avec les profondeurs
+        sous la forme d'un dictionnaire {'HP:..':...}.
         '''
         self.G = G
         self.root = root
@@ -18,7 +18,6 @@ class tsw:
         self.nodes = G.nodes()
         self.n = len(self.nodes)
         self.node2id = {n: i for i, n in enumerate(self.nodes)}
-        self.depths = nx.single_source_shortest_path_length(G.reverse(), source=root)
         self.parents = [list(G.successors(node)) for node in self.nodes]
         self.children = [list(G.predecessors(node)) for node in self.nodes]
         self.order = self._sort(root)
@@ -92,31 +91,30 @@ class tsw:
         Output:
             - distance de Wasserstein dans l'arbre, selon la propriété 1 de l'article Tree-Sliced Variants of Wasserstein Distances.
         '''
-        mu1 , mu2 = self.subtree_mass(d1), self.subtree_mass(d2) # mu(Gamma(ve)), nu(Gamma(ve)) pour tout e
+        mu1 , mu2 = self.subtree_mass(d1), self.subtree_mass(d2)  # mu(Gamma(ve)), nu(Gamma(ve)) pour tout e
         diff = np.abs(mu1-mu2)
         return np.float32(np.dot(self.edge_weight, diff))
 
-    def tsw_matrix(self, diseases, batchsize=256):
+    def tsw_matrix(self, diseases1, diseases2, batchsize=256):
         '''
         Input : 
             - diseases : dataframe (n, K) de maladies.
         Retourne une matrice (n, n) de distances entre maladies.
         '''
-        M = self.prepare_disease(diseases)
-        N = M.shape[0]
-        C = np.zeros((N, N), dtype=np.float32)
+        M1 = self.prepare_disease(diseases1)
+        M2 = self.prepare_disease(diseases2)
+        N1, N2 = M1.shape[0], M2.shape[0]
+        C = np.zeros((N1, N2), dtype=np.float32)
 
-        subtrees = np.stack([self.subtree_mass(M[i, :]) for i in range(N)])
-
-        for i in range(0, N, batchsize):
-            i_end = min(i+batchsize, N)
-            diff = np.abs(subtrees[i:i_end, np.newaxis, :]-subtrees[np.newaxis, :, :])
-            C[i:i_end, :] = diff @ self.edge_weight
-
+        for i in range(N1):
+            for j in range(N2):
+                C[i, j] = self.f_tsw(M1[i], M2[j])
         return C
+    
 
-
-
+uniform = {node: 1.0 for node in G_hpo_work.nodes()}
+tree = tsw(G_hpo_work, uniform)
+C = tree.tsw_matrix(work_omim)
 
 
 
