@@ -54,7 +54,7 @@ class BatchedDataset:
     """
  
     def __init__(
-        self, edges, objects, nnegs, batch_size, pos_neighbors, burnin=False, 
+        self, edges, objects, nnegs, batch_size, pos_neighbors, pos_ratio, burnin=False, 
         depth_temperature=1.0, max_edges_per_epoch=None
         ):
         self.edges = edges
@@ -62,6 +62,7 @@ class BatchedDataset:
         self.max_edges_per_epoch = max_edges_per_epoch
         self.N = len(objects)
         self.nnegs = nnegs
+        self.pseudo_pos_ratio = pos_ratio
         self.batch_size = batch_size
         self.burnin = burnin
         self.depth_temperature = depth_temperature
@@ -177,12 +178,37 @@ class BatchedDataset:
             batch_edges = self.edges_arr[chunk]
             us = batch_edges[:, 0]
             vs = batch_edges[:, 1]
+
+            # On échantillonne un pourcentage de noeuds pseudo positifs
+            if self.pseudo_pos_ratio > 0 :
+                n_pseudo = max(1, int(B * self.pseudo_pos_ratio))  # ex: ratio=0.2, B=100 → 20 paires
+                pseudo_us, pseudo_vs = [], []
+                edges_set = set(map(tuple, batch_edges))  # pour éviter les doublons du batch courant
+                for _ in range(n_pseudo * 5):  # oversample puis filtre
+                    if len(pseudo_us) >= n_pseudo:
+                        break
+                    # Tire un u aléatoire dans le batch
+                    u = us[np.random.randint(B)]
+                    pseudo_neighbors = self.pos_neighbors[int(u)]
+                    if len(pseudo_neighbors) == 0:
+                        continue
+                    v = int(np.random.choice(list(pseudo_neighbors)))
+                    if (u, v) not in edges_set:  # pas déjà dans les arêtes graphe
+                        pseudo_us.append(u)
+                        pseudo_vs.append(v)
+                        edges_set.add((u, v))
+                if pseudo_us:
+                    us = np.concatenate([us, pseudo_us])
+                    vs = np.concatenate([vs, pseudo_vs])
+                    B = len(us)
             
             ix = np.empty((B, 2 + self.nnegs), dtype=np.int64)
             ix[:, 0] = us
             ix[:, 1] = vs
 
             target_depths = self.depths[vs]
+            #pos_lists = [self.pos_neighbors[u] for u in us]  # Voisins positifs des u du batch
+            pos_lists = None
 
             for d in np.unique(target_depths):
                 mask = target_depths == d
@@ -207,7 +233,7 @@ class BatchedDataset:
                     n_missing = self.nnegs - n_valid[i]
                     negs[i, n_valid[i]:] = self.rng.integers(0, self.N, size=n_missing)
                 ix[mask, 2:] = negs
-            yield torch.from_numpy(ix)
+            yield torch.from_numpy(ix), pos_lists
 
     def __len__(self):
         return int(np.ceil(len(self.edges) / self.batch_size))

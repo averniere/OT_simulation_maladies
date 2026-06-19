@@ -107,12 +107,13 @@ def compute_all_distances(emb_i, all_emb_j):
     return matrices
 
 
-def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated):
+def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
     n=len(df_omim)
     m=len(df_orpha)
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     model.eval()
-    W = model.weight.detach().cpu().numpy()
+    # W = model.weight.detach().cpu().numpy()
+    W = model.weight.detach()
 
     print("Precompute...")
     def precompute(df):
@@ -142,7 +143,9 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
 
     all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
     term2idx = {h: k for k, h in enumerate(all_terms)}
-    E = W[[node2id_w[h] for h in all_terms]]  # Embeddings des termes actifs
+    # E = W[[node2id_w[h] for h in all_terms]]  # Embeddings des termes actifs
+    hpo_indices = [node2id_w[h] for h in all_terms]
+    E = W[hpo_indices].to(device)
 
     idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
     idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
@@ -153,7 +156,25 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     C = np.zeros((n,m))
 
     print("Precomputing full HPO distance matrix...")
-    D_full = np.sum((E[:, None, :] - E[None, :, :]) ** 2, axis=-1)  # (K, K)
+    # D_full = np.sum((E[:, None, :] - E[None, :, :]) ** 2, axis=-1)  # (K, K)
+    K = E.shape[0]
+    D_full = np.zeros((K, K), dtype=np.float32)
+    BLOCK = 256  # Réduire si encore OOM (128, 64...)
+    with torch.no_grad():
+        for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
+            Ei = E[i:i+BLOCK]          # (b, dim)
+            b = Ei.shape[0]
+            
+            for j in range(0, K, BLOCK):
+                Ej = E[j:j+BLOCK]      # (b2, dim)
+                b2 = Ej.shape[0]
+                
+                Ei_exp = Ei.unsqueeze(1).expand(b, b2, -1).reshape(b * b2, -1)
+                Ej_exp = Ej.unsqueeze(0).expand(b, b2, -1).reshape(b * b2, -1)
+                
+                d = model.manifold.distance(Ei_exp, Ej_exp, model.c)
+                D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
+    
     print(f"HPO distance matrix: {D_full.shape}")
 
     def compute_row(i):

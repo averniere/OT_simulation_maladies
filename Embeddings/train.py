@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import os
 import time
 import numpy as np
@@ -27,7 +28,9 @@ def train(
     hyperparams=None,
     patience=None,
     early_stop=1e-4,
-    c_optimizer=None
+    c_optimizer=None, 
+    all_u_pos=None,
+    all_v_pos=None
 ):
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
@@ -59,8 +62,8 @@ def train(
                 desc=f"Epoch {epoch+1}/{epochs}"
                 )
         # tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
-
-        for i_batch, inputs in enumerate(loader):
+        lambda_pos = min(0.02 * (epoch / 10), 0.3)
+        for i_batch, (inputs, pos_lists) in enumerate(loader):
             # inputs : LongTensor (B, 2+nnegs)
             # target : index de la paire positive = 0 pour chaque ligne
             inputs = inputs.to(device)
@@ -75,8 +78,18 @@ def train(
             u_exp = u.unsqueeze(1).expand_as(others)
             # Distance de Poincaré de u à v, n_negs
             scores = model.manifold.distance(u_exp, others, model.c)
-
-            loss = model.loss(scores, targets)
+            
+            # Termes positifs
+            ce_pos = torch.tensor(0.0, device=device)
+            if all_u_pos is not None:
+                n_samples = inputs.size(0) * 4
+                idx = torch.randint(len(all_u_pos), (n_samples,))
+                z_u = model.embeddings.weight[all_u_pos[idx].to(device)]
+                z_pos = model.embeddings.weight[all_v_pos[idx].to(device)]
+                d_pos = model.manifold.distance(z_u, z_pos, model.c)
+                ce_pos = -F.logsigmoid(-d_pos).mean()
+    
+            loss = model.loss(scores, targets) + lambda_pos*ce_pos
             loss.backward()
 
             optimizer.step(lr=current_lr)
