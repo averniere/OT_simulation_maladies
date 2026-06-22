@@ -150,6 +150,7 @@ for disorder in tree.iter("Disorder"):
             })
 
 df_orpha_omim = pd.DataFrame(rows)
+df_orpha_omim_exact = df_orpha_omim[df_orpha_omim["mapping_type"]=='E (Exact mapping: the two concepts are equivalent)']
 
 list_omim = df_orpha_omim['omim_id'].unique()
 list_orpha = df_orpha_omim['orpha_id'].unique()

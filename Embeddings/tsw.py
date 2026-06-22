@@ -6,6 +6,8 @@ from scipy.spatial.distance import cdist
 from tqdm import tqdm
 from data import *
 from information_content import get_ancestors0, compute_information_content
+from OT_utils import compute_transport_sinkhorn, compute_transport, evaluate_transport
+from data_utils import f_ground_truth
 
 
 class tsw:
@@ -177,10 +179,29 @@ def precompute_tsw_matrix(SM1, SM2, w):
             C[i, j] = s
     return C
 
-uniform = {node: 1.0 for node in G_hpo_work.nodes()}
+def transport(C, epsilon, gt_set, a=None, b=None):
+        print("======== Sans régularisation ========")
+        ot_plan, ot_cost = compute_transport(C, a, b)
+        ranks, pairs = evaluate_transport(ot_plan, gt_set, C)
 
-tree = tsw(G_hpo_work, uniform)
-tree._build_numba_structures()
-C = tree.tsw_matrix(work_omim, work_orpha)
-print(C)
+        print("======== Avec régularisation ========")
+        print(epsilon)
+        ot_plan_reg, ot_cots_reg = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
+        ranks_reg, pairs_reg = evaluate_transport(ot_plan_reg, gt_set, C)
+        return ranks_reg, pairs_reg
 
+
+def propagate_terms(df, hpo_cols, ancestors, depths, k=None):
+    mat = df[hpo_cols].to_numpy().copy()
+    col2idx = {c: i for i, c in enumerate(hpo_cols)}
+    for row in mat:
+        active_terms = [hpo_cols[i] for i, v in enumerate(row) if v == 1]
+        for term in active_terms:
+            for anc in ancestors.get(term, []):
+                if anc not in col2idx:
+                    continue
+                if k is None or depths[term] - depths[anc] <= k:
+                    row[col2idx[anc]] = 1
+    df_out = df.copy()
+    df_out[hpo_cols] = mat
+    return df_out
