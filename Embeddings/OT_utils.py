@@ -1,14 +1,15 @@
 import torch
 import ot
 import numpy as np
+import pandas as pd
 from scipy.sparse import csgraph
 from ot import sinkhorn
 from ot.optim import gcg
 from tqdm import tqdm
 from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
+from collections import defaultdict
 from poincare import PoincareManifold
-
 
 
 def compute_cost_matrix(omim, orpha):
@@ -338,6 +339,32 @@ def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
     ax[1].set_ylabel(r'$ 100 \cdot \frac{\langle C, P^*_\epsilon \rangle - \langle C, P^* \rangle}{\langle C, P^* \rangle} $', fontsize=25)
     ax[1].tick_params(which='both', size=20)
     ax[1].grid(ls='--') 
+
+
+# Régularisation Laplacienne
+def simi_ppi(df):
+    '''
+    Construction d'une matrice de similarités à partir des interactions protéine-protéine.
+    '''
+    n = df.shape[0]
+    protein_to_idx = defaultdict(list)
+    for i, row in df.iterrows():
+        proteins = row['protein'] if isinstance(row['protein'], list) else [row['protein']]
+        for p in proteins:
+            if pd.notna(p):
+                protein_to_idx[p].append(i)
+
+    S = np.zeros((n, n))
+    for i, row in df.iterrows():
+        interactions = list(row['protein2'])
+        for p in interactions:
+            list_j = protein_to_idx.get(p)
+            if list_j is not None:
+                for j in list_j:
+                    if i!=j:
+                        S[i, j] = 1
+                        S[j, i] = 1
+    return S
 
 
 def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=500, stopThr=1e-9, numInnerItermax=100000,stopInnerThr=1e-9, log=False, verbose=False):
