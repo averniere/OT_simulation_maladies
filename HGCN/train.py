@@ -10,7 +10,11 @@ from data import load_data2, load_data
 #from geoopt.optim import RiemannianAdam
 
 
-def train(args, G_hpo, features, save_dir):
+def train(args, G_hpo, features, save_dir, ancestors, depths):
+    roots = [n for n in G_hpo.nodes() if G_hpo.out_degree(n) == 0]
+    print(f"Nombre de racines : {len(roots)}")
+    print(f"Racines : {roots}")
+    print(f"HP:0000001 dans le graphe : {'HP:0000001' in G_hpo.nodes()}")
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -18,7 +22,7 @@ def train(args, G_hpo, features, save_dir):
     print("Device : ", device)
     args.patience = args.epochs if not args.patience else int(args.patience)
 
-    data = load_data(args, G_hpo, features)
+    data = load_data(args, G_hpo, features, ancestors, depths, p=0)
     #zero_rows = np.where(data["features"].sum(axis=1) == 0)[0]
     args.n_nodes, args.feat_dim = data['features'].shape
     print(f"Dimension des features : {args.feat_dim}")
@@ -50,10 +54,18 @@ def train(args, G_hpo, features, save_dir):
     #if not args.optimizer:
         #optimizer = RiemannianAdam(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+    #lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        #optimizer,
+        #step_size=int(args.lr_reduce_freq),
+        #gamma=float(args.gamma))
+
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        step_size=int(args.lr_reduce_freq),
-        gamma=float(args.gamma))
+        mode='max',
+        factor=0.5,
+        patience=50,
+        min_lr=1e-6
+        )
 
     tot_params = sum([np.prod(p.size()) for p in model.parameters()])
     model = model.to(device)
@@ -95,30 +107,20 @@ def train(args, G_hpo, features, save_dir):
                 torch.nn.utils.clip_grad_norm_(param, max_norm)
             '''
         optimizer.step()
-        # Possible source de problèmes
-        # for name, param in model.named_parameters():
-            # if param.grad is not None and torch.isnan(param.grad).any():
-                # print(f"NaN dans grad de {name}")
-        # for group in optimizer.param_groups:
-            # for p in group['params']:
-                # if p in optimizer.state:
-                    # state = optimizer.state[p]
-                    # if 'exp_avg' in state:
-                        # state['exp_avg'] = torch.nan_to_num(state['exp_avg'], nan=0.0, posinf=0.0, neginf=0.0)
-                    # if 'exp_avg_sq' in state:
-                        # state['exp_avg_sq'] = torch.nan_to_num(state['exp_avg_sq'], nan=0.0, posinf=0.0, neginf=0.0)
-        # with torch.no_grad():
-            # for param in model.parameters():
-                # param.data = torch.nan_to_num(param.data, nan=0.0, posinf=0.0, neginf=0.0)
 
-        lr_scheduler.step()
+        #lr_scheduler.step()
         if (epoch + 1) % args.eval_freq == 0:
             model.eval()
             embeddings = model.encode(data['features'], data['adj_train_norm'])
+            if epoch == 0:
+                print(f"Features input - mean: {data['features'].mean():.6f}, std: {data['features'].std():.6f}, zeros: {(data['features']==0).float().mean():.2%}")
+                print(f"Embeddings - mean: {embeddings.mean():.6f}, std: {embeddings.std():.6f}")
+                print(f"Embeddings nuls: {(embeddings.abs().sum(dim=1)==0).sum().item()} / {embeddings.shape[0]}")
             val_metrics = model.compute_metrics(embeddings, data, 'val')
             val_metrics_history.append({'epoch': epoch + 1, 
             **{k: v.item() if torch.is_tensor(v) else v for k, v in val_metrics.items()}})
-
+            lr_scheduler.step(val_metrics['ap'])
+            
             if model.has_improved(best_val_metrics, val_metrics):
                 best_test_metrics = model.compute_metrics(embeddings, data, 'test')
                 best_emb = embeddings.cpu()
@@ -131,6 +133,26 @@ def train(args, G_hpo, features, save_dir):
                 if counter == args.patience and epoch > args.min_epochs:
                     print(f"Early stopping : {epoch}")
                     break
+        if epoch % 50 == 0:
+            manifold = model.manifold
+    
+            u_pos = embeddings[data['train_edges'][:, 0]]
+            v_pos = embeddings[data['train_edges'][:, 1]]
+            u_neg = embeddings[data['train_edges_false'][:, 0]]
+            v_neg = embeddings[data['train_edges_false'][:, 1]]
+    
+            dist_pos = manifold.sqdist(u_pos, v_pos, c=model.c)
+            dist_neg = manifold.sqdist(u_neg, v_neg, c=model.c)
+    
+            pos_scores = model.dc.forward(dist_pos)
+            neg_scores = model.dc.forward(dist_neg)
+    
+            print(f"Distance pos : mean={dist_pos.mean():.4f}, std={dist_pos.std():.4f}")
+            print(f"Distance neg : mean={dist_neg.mean():.4f}, std={dist_neg.std():.4f}")
+            print(f"Scores positifs : mean={pos_scores.mean():.4f}, std={pos_scores.std():.4f}")
+            print(f"Scores négatifs : mean={neg_scores.mean():.4f}, std={neg_scores.std():.4f}")
+            print(f"Embeddings std: {embeddings.std(dim=0).mean():.6f}")
+
     if not best_test_metrics:
         model.eval()
         best_emb = model.encode(data['features'], data['adj_train_norm'])

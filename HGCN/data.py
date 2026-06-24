@@ -9,6 +9,8 @@ import os
 
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from itertools import combinations
+from tqdm import tqdm 
 
 from similarities import compute_rfa, compute_rfa_fast
 
@@ -27,7 +29,7 @@ def get_cache_key(hpo_graph, omim_df):
     return f"{graph_hash}_{df_hash}"
 
 
-def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
+def load_data(args, hpo_graph, omim_df, ancestors, depths, p=0, cache_dir=".cache"):
 
     os.makedirs(cache_dir, exist_ok=True)
     cache_key = get_cache_key(hpo_graph, omim_df)
@@ -45,32 +47,33 @@ def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
     adj = nx.to_scipy_sparse_array(hpo_graph, nodelist=nodes, format='csr')
     
     # Features
-    print("Propagate HPO annotations")
-    omim_df = propagate_annotations(omim_df, hpo_graph)
-    all_hpo_in_graph = [n for n in nodes if n in omim_df.columns]
-    missing_hpo = [n for n in nodes if n not in omim_df.columns]
+    hpo_cols = [c for c in omim_df.columns if c.startswith('HP')]
+    if p>0:
+        print("Propagate HPO annotations")
+        omim_df_w = propagate_terms(omim_df, hpo_cols, ancestors, depths, p)
+    else:
+        omim_df_w = omim_df.copy()
+    all_hpo_in_graph = [n for n in nodes if n in omim_df_w.columns]
+    missing_hpo = [n for n in nodes if n not in omim_df_w.columns]
 
     print(f"Termes HPO avec colonne dans omim_df : {len(all_hpo_in_graph)}")
     print(f"Termes HPO sans colonne (nœuds internes purs) : {len(missing_hpo)}")
 
-    hpo_cols = [col for col in omim_df.columns if col in node2idx]
+    hpo_cols_w = [col for col in omim_df_w.columns if col in node2idx]
     # transformer = TfidfTransformer()
     # hpo_matrix = transformer.fit_transform(omim_df[hpo_cols].values)
     # omim_df[hpo_cols] = hpo_matrix.toarray()
     print("Load features")
     
-    omim_features = np.zeros((len(nodes), len(omim_df)))
-    # for i, col in enumerate(hpo_cols):
-        # idx = node2idx[col]
-        # omim_features[idx] = (hpo_matrix[:, i].toarray().ravel())
+    omim_features = np.zeros((len(nodes), len(omim_df_w)))  # Matrice binaire avec un 1 si un noeud est présent dans une maladie
     for col in all_hpo_in_graph:
         idx = node2idx[col]
         omim_features[idx] = omim_df[col].values.astype(np.float32)  # hpo_matrix[:, hpo_cols.index(col)].toarray().ravel()
-    G_rev = hpo_graph.reverse()
-    for node in nx.topological_sort(G_rev):  # du bas vers le haut
+    # Propagagtion des maladies si nécessaire vers les parents
+    for node in nx.topological_sort(hpo_graph):  # du bas vers le haut
         idx = node2idx[node]
-        if omim_features[idx].sum() == 0:
-            children = list(hpo_graph.successors(node))
+        if omim_features[idx].sum() == 0:  # Si pas de maladie associée
+            children = list(hpo_graph.predecessors(node))  # Parents ?
             if children:
                 child_feats = np.array([omim_features[node2idx[c]] for c in children])
                 if child_feats.sum() > 0:
@@ -83,26 +86,11 @@ def load_data(args, hpo_graph, omim_df, cache_dir=".cache"):
     zero_nodes = (omim_features.sum(axis=1) == 0).sum()
     print(f"Nœuds avec features nulles : {zero_nodes} / {len(nodes)}")
 
-    '''
-    # TEST
-    features_dense = features.copy()
-    zero_rows = np.where(features_dense.sum(axis=1) == 0)[0]
-    print(f"Noeuds sans features : {len(zero_rows)}")
-    adj_csr = scipy.sparse.csr_matrix(adj)
-    for node in zero_rows:
-        neighbors = adj_csr.getrow(node).indices
-        neighbor_feats = features_dense[neighbors]
-        if neighbor_feats.sum() > 0:
-            features_dense[node] = neighbor_feats.mean(axis=0)
-        else:
-            features_dense[node] = features_dense.mean(axis=0) * 1e-3
-    '''
-
     #omim_reindexed = omim_df[sorted(hpo_cols, key=lambda x: node2idx[x])]
     print(adj.shape)       # doit être (n_terms, n_terms)
     print(features.shape)  # doit être (n_terms, n_diseases)
     
-    data = {'adj_train': adj,'features': features}
+    data = {'adj_train': adj, 'features': features}
     print("Load train, test and validation datasets")
     adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
                     adj, args.val_prop, args.test_prop, args.split_seed, hpo_graph, node2idx)
@@ -129,14 +117,14 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
     
     degree = np.array([hpo_graph.degree(n) for n in nodes]).reshape(-1, 1)
     
-    root = [n for n, d in hpo_graph.in_degree() if d == 0]
+    root = [n for n, d in hpo_graph.out_degree() if d == 0]
     if root:
-        depths = nx.single_source_shortest_path_length(hpo_graph, root[0])
+        depths = nx.single_source_shortest_path_length(hpo_graph.reverse(), root[0])
         depth = np.array([depths.get(n, 0) for n in nodes]).reshape(-1, 1)
     else:
         depth = np.zeros((n, 1))
     
-    n_descendants = np.array([len(nx.descendants(hpo_graph, node)) for node in nodes]).reshape(-1, 1)
+    n_descendants = np.array([len(nx.ancestors(hpo_graph, node)) for node in nodes]).reshape(-1, 1)
     
     struct_features = np.hstack([degree, depth, n_descendants])
     struct_features = struct_features / (struct_features.max(axis=0) + 1e-8)
@@ -149,15 +137,11 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
 
 
 def get_transitive_edges(hpo_graph, node2idx):
-
+    
     pos_edges = []
-
     for node in hpo_graph.nodes():
-
-        descendants = nx.descendants(hpo_graph, node)
-
+        descendants = nx.ancestors(hpo_graph, node)
         for desc in descendants:
-
             pos_edges.append([
                 node2idx[node],
                 node2idx[desc]
@@ -213,17 +197,6 @@ def mask_edges(adj, val_prop, test_prop, seed, hpo_graph, node2idx):
     adj_train = adj_train  # +adj_train.T
     return (adj_train, torch.LongTensor(train_edges), torch.LongTensor(train_edges_false), torch.LongTensor(val_edges), torch.LongTensor(val_edges_false), torch.LongTensor(test_edges), torch.LongTensor(test_edges_false),)
 
-    # train_nodes = set(train_edges[:, 0].tolist()) | set(train_edges[:, 1].tolist())
-    # train_neg_mask = np.array([e[0] in train_nodes and e[1] in train_nodes for e in neg_edges])
-    # train_edges_false = np.concatenate([neg_edges[train_neg_mask], val_edges, test_edges], axis=0)
-
-    # adj_train = scipy.sparse.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape)
-    # adj_train = adj_train + adj_train.T
-    # return adj_train, torch.LongTensor(train_edges), torch.LongTensor(train_edges_false), torch.LongTensor(val_edges), \
-           # torch.LongTensor(val_edges_false), torch.LongTensor(test_edges), torch.LongTensor(
-            # test_edges_false)  
-
-
 
 def process(adj, features, normalize_adj, normalize_feats):
     if scipy.sparse.isspmatrix(features):
@@ -261,49 +234,20 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     return torch.sparse.FloatTensor(indices, values, shape)
 
 
-def propagate_annotations(omim_df, hpo_graph):
-    """
-    Propage les annotations HPO vers tous les ancêtres.
-
-    Parameters
-    ----------
-    omim_df : pd.DataFrame
-        lignes = maladies
-        colonnes = HPO
-        valeurs = 0/1
-
-    hpo_graph : networkx.DiGraph
-        Graphe HPO orienté parent -> enfant
-
-    Returns
-    -------
-    propagated_df : pd.DataFrame
-    """
-    hpo_cols = [c for c in omim_df.columns if c in hpo_graph.nodes]
-    hpo2idx = {h:i for i,h in enumerate(hpo_cols)}
-
-    # Ancestors indices
-    ancestors_idx = {}
-
-    print("Precomputing ancestor indices...")
-    for h in hpo_cols:
-        anc = nx.ancestors(hpo_graph, h)
-        anc_idx = [hpo2idx[a] for a in anc if a in hpo2idx]
-        ancestors_idx[hpo2idx[h]] = anc_idx
-
-    X = omim_df[hpo_cols].values.copy()
-    n_diseases = X.shape[0]
-
-    print("Propagating...")
-    for i in range(n_diseases):
-        active = np.where(X[i] > 0)[0]
-        propagated = set(active)
-        for h_idx in active:
-            propagated.update(ancestors_idx[h_idx])
-        X[i, list(propagated)] = 1
-    omim_df[hpo_cols] = X
-
-    return omim_df
+def propagate_terms(df, hpo_cols, ancestors, depths, k=None):
+    mat = df[hpo_cols].to_numpy().copy()
+    col2idx = {c: i for i, c in enumerate(hpo_cols)}
+    for row in mat:
+        active_terms = [hpo_cols[i] for i, v in enumerate(row) if v == 1]
+        for term in active_terms:
+            for anc in ancestors.get(term, []):
+                if anc not in col2idx:
+                    continue
+                if k is None or depths[term] - depths[anc] <= k:
+                    row[col2idx[anc]] = 1
+    df_out = df.copy()
+    df_out[hpo_cols] = mat
+    return df_out
 
 
 def load_data2(args, hpo_graph, omim_df):
@@ -374,3 +318,94 @@ def load_data2(args, hpo_graph, omim_df):
         args.normalize_adj,
         args.normalize_feats)
     return data
+
+
+def add_edges(diseases, G, depths):
+    """
+    Si pi et pj sont deux termes actifs d'une même maladie, non reliés dans l'ontologie,
+    ajouter une arête entre eux.
+    """
+    G_hpo = G.copy()
+    hpo_cols = [c for c in diseases.columns if c.startswith('HP')]
+    cols2id = {i: hp for i, hp in enumerate(hpo_cols)}
+    X = diseases[hpo_cols].values
+    existing_edges = set(G_hpo.edges())
+    new_edges = set()
+    for i in tqdm(range(len(diseases))):
+        active_i = np.where(X[i] == 1)[0]   # termes actifs de la maladie i
+        if len(active_i) < 2:
+            continue
+        for idx1, idx2 in combinations(active_i, 2):
+            hp1, hp2 = cols2id[idx1], cols2id[idx2]
+            d1, d2 = depths[hp1], depths[hp2]
+            if d2 >= d1:
+                edge = (hp2, hp1)
+            else:
+                edge = (hp1, hp2)
+            if edge not in existing_edges:
+                new_edges.add(edge)
+    G_hpo.add_edges_from(new_edges)
+    return G_hpo
+
+
+def add_corresponding_terms(df1, df2, correspondances):
+    """
+    Pour les maladies de df1 qui ont une maladie correspondante dans df2, ajouter les termes actifs
+    de df2 qui ne sont pas dans df1.
+    Retourne un dataframe result avec les lignes des maladies de df1 complétées avec les termes de df2.
+    """
+    result = df1.copy()
+    hpo_cols = [c for c in df1.columns if c.startswith('HP')]
+    df1_to_idx = {v: i for i, v in enumerate(df1['database_id'].values)} 
+    df2_to_idx = {v: i for i, v in enumerate(df2['database_id'].values)}
+    mask = (
+        correspondances['omim_id'].isin(df1_to_idx) & correspondances['orpha_id'].isin(df2_to_idx)
+        )
+    valid = correspondances[mask]
+
+    hpo1 = result[hpo_cols].fillna(0).astype(int).values.copy()
+    hpo2 = df2[hpo_cols].fillna(0).astype(int).values.copy()
+    col_positions = result.columns.get_indexer(hpo_cols)
+
+    for _, row in tqdm(valid.iterrows(), total=len(valid), desc="Fusion HPO"):
+        d1 = row['omim_id']
+        d2 = row['orpha_id']
+        i1 = df1_to_idx[d1]
+        i2 = df2_to_idx[d2]
+        hpo1[i1] |= hpo2[i2]
+    result.iloc[:, col_positions] = hpo1
+    return result
+
+
+deprecated={
+    'HP:0006887':'HP:0001249',
+    'HP:0002275':'HP:0002311',
+    'HP:0002370':'HP:0002311',
+    'HP:0002438':'HP:0001317',
+    'HP:0004059':'HP:0006433',
+    'HP:0005365':'HP:0010976',
+    'HP:0005435':'HP:0011840',
+    'HP:0005807':'HP:0009881',
+    'HP:0007543':'HP:0000962',
+    'HP:0007680':'HP:0007894',
+    'HP:0007850':'HP:0030666',
+    'HP:0007898':'HP:0012231',
+    'HP:0009062':'HP:0008936',
+    'HP:0010064':'HP:0010091',
+    'HP:0012178':'HP:0012177',
+    'HP:0030050':'HP:0002524',  # Suspect
+    'HP:0031014':'HP:0031632',
+    'HP:0100786':'HP:0001262',
+    'HP:0200065':'HP:0000533'
+}
+
+
+def get_ancestors0(G, node):
+    visited = set()
+    queue = list(G.successors(node))
+    while queue:
+        current = queue.pop()
+        if current not in visited:
+            visited.add(current)
+            queue.extend(G.successors(current))
+    return visited

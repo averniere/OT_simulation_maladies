@@ -26,8 +26,8 @@ class BaseModel(nn.Module):
             #args.feat_dim = args.feat_dim + 1
         self.nnodes = args.n_nodes
         self.encoder = encoder.HGCN(self.c, args, device)
-        self.input_embeddings = nn.Embedding(self.nnodes, args.feat_dim)
-        nn.init.uniform_(self.input_embeddings.weight, -1e-5, 1e-5)
+        #self.input_embeddings = nn.Embedding(self.nnodes, args.feat_dim)
+        #nn.init.uniform_(self.input_embeddings.weight, -1e-5, 1e-5)
 
     def encode(self, x, adj):
         #if self.manifold.name == 'Hyperboloid':

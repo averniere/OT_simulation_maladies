@@ -46,6 +46,7 @@ def add_corresponding_terms(df1, df2, correspondances):
     """
     Pour les maladies de df1 qui ont une maladie correspondante dans df2, ajouter les termes actifs
     de df2 qui ne sont pas dans df1.
+    Retourne un dataframe result avec les lignes des maladies de df1 complétées avec les termes de df2.
     """
     result = df1.copy()
     hpo_cols = [c for c in df1.columns if c.startswith('HP')]
