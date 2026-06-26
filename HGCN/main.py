@@ -30,12 +30,12 @@ class Args:
     seed : int = 42
     normalize_adj: bool = True
     normalize_feats: bool = True
-    epochs : int = 2500
+    epochs : int = 3000
     min_epochs : int = 100
     patience : int = 200
     lr : float = 1e-2
     lr_reduce_freq : int = None
-    weight_decay : float = 0.0
+    weight_decay : float = 1e-4
     gamma : float = 0.5  # Par combien multiplier le learning_rate si on veut le décroitre avec lr_scheduler
     grad_clip : float = 5.
     eval_freq : int = 5
@@ -50,7 +50,7 @@ class Args:
     local_agg : bool = False  # Local aggregation
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
-    dim : int = 20  # Dimension de l'embedding
+    dim : int = 30  # Dimension de l'embedding
     optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
 
 args = Args()

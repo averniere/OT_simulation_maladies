@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 import ot
+import data
 
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from data import deprecated
+from collections import defaultdict
 
 
 def compute_costs_matrix_wasserstein2(
@@ -13,14 +14,15 @@ def compute_costs_matrix_wasserstein2(
     embeddings, 
     manifold,
     c,
-    deprecated=deprecated
+    weights=None,
+    deprecated=data.deprecated
     ):
     n = len(df_omim)
     m = len(df_orpha)
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
 
     print("Precompute...")
-    def precompute(df):
+    def precompute(df, weights=weights):
         '''
         Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
         le vecteur de poids uniformes associés.
@@ -29,12 +31,15 @@ def compute_costs_matrix_wasserstein2(
         resolved_cols = np.array(
             [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
             dtype=object)
-        valid_mask = resolved_cols != None
+        valid_mask = resolved_cols != np.array(None)
         X_valid = X[:, valid_mask]
         resolved_valid = resolved_cols[valid_mask]
         terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
-        weights = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
-        return terms, weights
+        if weights is None: 
+            w = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
+        else : 
+            w = [np.array([weights[t] for t in term]/np.sum([weights[t] for t in term])) for term in terms]
+        return terms, w
 
     terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
     terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
@@ -194,3 +199,39 @@ def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
     gt_set = set(ground_truth)
     return gt_set, valid_omim, valid_orpha
 
+
+def compute_information_content(df_omim, G_hpo, deprecated=data.deprecated):
+    '''
+    Calcul la fréquence d'apparition d'un term dans une maladie.
+    Pour avoir l'IC il faut appliquer une fonction décroissante, typiquement -log.
+    '''
+    colnames = [c for c in df_omim.columns if c.startswith('HP:')]
+    hp_matrix = df_omim[colnames].values
+    ids = df_omim.index.tolist()
+
+    weights = defaultdict(float)
+    diseases = defaultdict(set)
+    all_diseases = defaultdict(set)
+    ancestors = {}
+
+    def get_ancestors(term):
+        if term not in ancestors:
+            ancestors[term]= data.get_ancestors0(G_hpo, term)
+        return ancestors[term]
+
+    row_idxs, col_idxs = np.where(hp_matrix == 1)
+    for row_idx, col_idx in zip(row_idxs, col_idxs):
+        disease_id = ids[row_idx]
+        term = colnames[col_idx]
+        resolved = deprecated.get(term, term)
+        
+        weights[resolved] += 1
+        diseases[resolved].add(disease_id)
+        all_diseases[resolved].add(disease_id)
+        
+        for ancestor in get_ancestors(resolved):
+            weights[ancestor] += 1
+            all_diseases[ancestor].add(disease_id)
+
+    total = sum(weights.values())
+    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
