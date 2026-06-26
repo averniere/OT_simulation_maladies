@@ -1,3 +1,5 @@
+import os
+os.chdir('/home/onyxia/work/OT_simulation_maladies')
 import pandas as pd
 import networkx as nx
 import requests, xml.etree.ElementTree as ET

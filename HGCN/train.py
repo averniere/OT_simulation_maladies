@@ -102,10 +102,7 @@ def train(args, G_hpo, features, save_dir, ancestors, depths):
             max_norm = float(args.grad_clip)
             all_params = list(model.parameters())
             torch.nn.utils.clip_grad_norm_(all_params, max_norm)
-            '''
-            for param in all_params:
-                torch.nn.utils.clip_grad_norm_(param, max_norm)
-            '''
+    
         optimizer.step()
 
         #lr_scheduler.step()
