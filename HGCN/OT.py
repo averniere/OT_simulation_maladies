@@ -245,7 +245,7 @@ def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manif
     def compute_disease_barycenters(
         profils_omim, node2id, embeddings, deprecated, weights=None, normalize=False, c=1
         ):
-        W = embeddings.copy()
+        W = torch.from_numpy(embeddings.copy())
         hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]
 
         col_meta = {}
