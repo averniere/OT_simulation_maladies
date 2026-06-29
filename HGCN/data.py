@@ -78,9 +78,11 @@ def load_data(args, hpo_graph, omim_df, ancestors, depths, p=0, cache_dir=".cach
                 child_feats = np.array([omim_features[node2idx[c]] for c in children])
                 if child_feats.sum() > 0:
                     omim_features[idx] = child_feats.mean(axis=0)
-
-    print("Compute structural features")
-    features = compute_structural_features(hpo_graph, nodes, node2idx, omim_features)
+    if args.compute_structural:
+        print("Compute structural features")
+        features = compute_structural_features(hpo_graph, nodes, node2idx, omim_features)
+    else:
+        features = omim_features
     features = scipy.sparse.csr_matrix(features)
 
     zero_nodes = (omim_features.sum(axis=1) == 0).sum()
@@ -132,7 +134,8 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
     if not isinstance(omim_features, np.ndarray):
         omim_features = np.array(omim_features)
     
-    features = np.hstack([omim_feat, struct_features])
+    #features = np.hstack([omim_feat, struct_features])
+    features = struct_features
     return features
 
 

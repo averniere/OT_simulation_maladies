@@ -3,6 +3,8 @@ import torch
 import ot
 import data
 
+import frechetmean as fm
+
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from collections import defaultdict
@@ -92,7 +94,6 @@ def compute_costs_matrix_wasserstein2(
     results = Parallel(n_jobs=-1)(
         delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
     )
-    C = np.zeros((len(df_omim), len(df_orpha)))
     for i, row in results:
         C[i] = row
     return C
@@ -235,3 +236,56 @@ def compute_information_content(df_omim, G_hpo, deprecated=data.deprecated):
 
     total = sum(weights.values())
     return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+
+
+def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manifold, weights=None, c=1.):
+    w_omim = omim.copy()
+    w_orpha = orpha.copy()
+
+    def compute_disease_barycenters(
+        profils_omim, node2id, embeddings, deprecated, weights=None, normalize=False, c=1
+        ):
+        W = embeddings.copy()
+        hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]
+
+        col_meta = {}
+        for col in hpo_cols:
+            resolved = deprecated.get(col, col)
+            if resolved in node2id:
+                w = weights[resolved] if (weights is not None and resolved in weights) else 1.0
+                col_meta[col] = (W[node2id[resolved]], w)  # (Coordonnée, pondération)
+
+        valid_cols = list(col_meta.keys())
+        barycenters = []
+        for _, row in tqdm(profils_omim.iterrows(), total=len(profils_omim), desc="Barycentres"):
+            active = [(col_meta[col][0], col_meta[col][1]) 
+            for col in valid_cols if row[col] == 1]  # Termes actifs
+
+            if len(active) < 1:
+                barycenters.append(None)
+                continue
+
+            points = torch.stack([a[0] for a in active])
+            if weights is None:
+                w = None
+            else:
+                w = torch.tensor([a[1] for a in active], dtype=torch.float32)
+                if normalize:
+                    w = w / w.sum()
+            barycenter = fm.frechet_mean(points, c, w)
+            barycenters.append(barycenter.numpy())
+
+        profils_omim['barycenter'] = barycenters
+        return profils_omim
+    w_omim = compute_disease_barycenters(w_omim, node2id, embeddings, deprecated, weights)
+    w_orpha = compute_disease_barycenters(w_orpha, node2id, embeddings, deprecated, weights)
+
+    omim_bary = torch.tensor(np.stack(w_omim['barycenter'].values),  dtype=torch.float32)
+    orpha_bary = torch.tensor(np.stack(w_orpha['barycenter'].values), dtype=torch.float32)
+
+    n, m = omim_bary.shape[0], orpha_bary.shape[0]
+    u = omim_bary.unsqueeze(1).expand(n, m, -1).reshape(n * m, -1)
+    v = orpha_bary.unsqueeze(0).expand(n, m, -1).reshape(n * m, -1)
+
+    dists = manifold.sqdist(u, v, c=1)  # (n*m,)
+    return dists.reshape(n, m).numpy()

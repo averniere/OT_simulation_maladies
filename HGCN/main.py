@@ -52,6 +52,7 @@ class Args:
     num_layers : int = 2  # Nb of hidden layers
     dim : int = 30  # Dimension de l'embedding
     optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
+    compute_structural : bool = True
 
 args = Args()
 
