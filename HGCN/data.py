@@ -412,3 +412,24 @@ def get_ancestors0(G, node):
             visited.add(current)
             queue.extend(G.successors(current))
     return visited
+
+
+def node_similarity_score(df, G):
+    nodes = list(G.nodes())
+    node2idx = {n: i for i, n in enumerate(nodes)}
+    omim_features = np.zeros((len(nodes), len(df)))  # Matrice binaire avec un 1 si un noeud est présent dans une maladie
+    all_hpo_in_graph = [n for n in nodes if n in df.columns]
+    for col in all_hpo_in_graph:
+        idx = node2idx[col]
+        omim_features[idx] = df[col].values.astype(np.float32)  # hpo_matrix[:, hpo_cols.index(col)].toarray().ravel()
+    # Propagagtion des maladies si nécessaire des enfants vers les parents
+    for node in nx.topological_sort(G):  # du bas vers le haut
+        idx = node2idx[node]
+        if omim_features[idx].sum() == 0:  # Si pas de maladie associée
+            children = list(G.predecessors(node))
+            if children:
+                child_feats = np.array([omim_features[node2idx[c]] for c in children])
+                if child_feats.sum() > 0:
+                    omim_features[idx] = child_feats.mean(axis=0)
+    S = omim_features-np.mean(omim_features, axis=1, keepdims=True)
+    return S @ S.T

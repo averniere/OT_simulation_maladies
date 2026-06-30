@@ -17,7 +17,8 @@ def compute_costs_matrix_wasserstein2(
     manifold,
     c,
     weights=None,
-    deprecated=data.deprecated
+    deprecated=data.deprecated,
+    S=None
     ):
     n = len(df_omim)
     m = len(df_orpha)
@@ -62,7 +63,7 @@ def compute_costs_matrix_wasserstein2(
     print("Precomputing full HPO distance matrix...")
     K = E.shape[0]
     D_full = np.zeros((K, K), dtype=np.float32)
-    BLOCK = 256  # Réduire si encore OOM (128, 64...)
+    BLOCK = 128  # Réduire si encore OOM (128, 64...)
     for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
         Ei = E[i:i+BLOCK]          # (b, dim)
         b = Ei.shape[0]
@@ -77,6 +78,10 @@ def compute_costs_matrix_wasserstein2(
             D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
     
     print(f"HPO distance matrix: {D_full.shape}")
+    if S is not None: 
+        D_full/= D_full.max()
+        simi = S[np.ix_(hpo_indices, hpo_indices)]
+        D_full -= D_full * simi  # éventuellement : alpha*simi
 
     def compute_row(i):
         if not idx_i[i]:
@@ -85,17 +90,16 @@ def compute_costs_matrix_wasserstein2(
         row = np.zeros(len(terms_j))
         valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
         for j in valid_js:
-            # Ej = E[idx_j[j]]
-            # M = cost_hpos(Ei, Ej) 
             M = D_full[np.ix_(idx_i[i], idx_j[j])]
             _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
+            # compute_transport_sinkhorn(M, weights_i[i], weights_j[j], epsilon=0.1*np.mean(M))
         return i, row
     
     results = Parallel(n_jobs=-1)(
-        delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM")
-    )
-    for i, row in results:
-        C[i] = row
+       delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM"))
+       
+    for i, row in enumerate(results):
+        C[i] = row 
     return C
 
     
