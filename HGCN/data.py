@@ -432,4 +432,6 @@ def node_similarity_score(df, G):
                 if child_feats.sum() > 0:
                     omim_features[idx] = child_feats.mean(axis=0)
     S = omim_features-np.mean(omim_features, axis=1, keepdims=True)
-    return S @ S.T
+    d = np.linalg.norm(S, axis=1)
+    d = np.where(d==0, 1e-10, d)
+    return (S @ S.T)/np.outer(d, d)

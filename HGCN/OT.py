@@ -18,7 +18,8 @@ def compute_costs_matrix_wasserstein2(
     c,
     weights=None,
     deprecated=data.deprecated,
-    S=None
+    S=None,
+    gromov=False
     ):
     n = len(df_omim)
     m = len(df_orpha)
@@ -90,15 +91,19 @@ def compute_costs_matrix_wasserstein2(
         row = np.zeros(len(terms_j))
         valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
         for j in valid_js:
+            if gromov: 
+                C1 = D_full[np.ix_(idx_i[i], idx_i[i])]
+                C2 = D_full[np.ix_(idx_j[j], idx_j[j])]
+                gm_plan = ot.gromov_wasserstein2(C1, C2)
+                row[j] = np.sqrt(gm_plan)/2
             M = D_full[np.ix_(idx_i[i], idx_j[j])]
             _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
-            # compute_transport_sinkhorn(M, weights_i[i], weights_j[j], epsilon=0.1*np.mean(M))
         return i, row
     
     results = Parallel(n_jobs=-1)(
        delayed(compute_row)(i) for i in tqdm(range(len(df_omim)), desc="OMIM"))
        
-    for i, row in enumerate(results):
+    for i, row in results:
         C[i] = row 
     return C
 
@@ -293,3 +298,140 @@ def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manif
 
     dists = manifold.sqdist(u, v, c=1)  # (n*m,)
     return dists.reshape(n, m).numpy()
+
+
+def group_by_length(idx_list, weights_list):
+    """Regroupe les indices de disease par taille de support (nb de termes HPO actifs)."""
+    groups = defaultdict(list)
+    for pos, (idx, w) in enumerate(zip(idx_list, weights_list)):
+        if idx:
+            groups[len(idx)].append(pos)
+    stacked = {}
+    for L, positions in groups.items():
+        I = np.array([idx_list[p] for p in positions])
+        W = np.array([weights_list[p] for p in positions])
+        stacked[L] = (np.array(positions), I, W)
+    return stacked
+
+
+def compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, n_iter=200, device="cuda"):
+    Ms = Ms.to(device)
+    As = As.to(device)
+    Bs = Bs.to(device)
+    K = torch.exp(-Ms / epsilon)
+    u = torch.ones_like(As)
+    v = torch.ones_like(Bs)
+    for _ in range(n_iter):
+        u = As / (torch.bmm(K, v.unsqueeze(-1)).squeeze(-1) + 1e-9)
+        v = Bs / (torch.bmm(K.transpose(1, 2), u.unsqueeze(-1)).squeeze(-1) + 1e-9)
+    P = u.unsqueeze(-1) * K * v.unsqueeze(1)
+    cost = (P * Ms).sum(dim=(1, 2))
+    return cost.cpu().numpy()
+
+
+def compute_costs_matrix_wasserstein_batched(
+    df_omim, df_orpha, 
+    node2id_w, 
+    embeddings, 
+    manifold,
+    c,
+    weights=None,
+    deprecated=data.deprecated,
+    S=None,
+    gromov=False
+    ):
+    n = len(df_omim)
+    m = len(df_orpha)
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+
+    print("Precompute...")
+    def precompute(df, weights=weights):
+        '''
+        Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
+        le vecteur de poids uniformes associés.
+        '''
+        X = df[hpo_cols].to_numpy(dtype=bool)
+        resolved_cols = np.array(
+            [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
+            dtype=object)
+        valid_mask = resolved_cols != np.array(None)
+        X_valid = X[:, valid_mask]
+        resolved_valid = resolved_cols[valid_mask]
+        terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
+        if weights is None: 
+            w = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
+        else : 
+            w = [np.array([weights[t] for t in term]/np.sum([weights[t] for t in term])) for term in terms]
+        return terms, w
+
+    terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
+    terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
+    print("Finished !")
+
+    all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
+    term2idx = {h: k for k, h in enumerate(all_terms)}
+    hpo_indices = [node2id_w[h] for h in all_terms]  # Indices selon node2id_w
+    E = embeddings[hpo_indices]  # Fonctionne si embeddings est construit de la même manière que node2id_w
+    if isinstance(E, np.ndarray):
+        E = torch.tensor(E, dtype=torch.float32)
+
+    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
+    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
+
+    C = np.zeros((n, m))
+
+    print("Precomputing full HPO distance matrix...")
+    K = E.shape[0]
+    D_full = np.zeros((K, K), dtype=np.float32)
+    BLOCK = 128  # Réduire si encore OOM (128, 64...)
+    for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
+        Ei = E[i:i+BLOCK]          # (b, dim)
+        b = Ei.shape[0]
+        for j in range(0, K, BLOCK):
+            Ej = E[j:j+BLOCK]      # (b2, dim)
+            b2 = Ej.shape[0]
+                
+            Ei_exp = Ei.unsqueeze(1).expand(b, b2, -1).reshape(b * b2, -1)
+            Ej_exp = Ej.unsqueeze(0).expand(b, b2, -1).reshape(b * b2, -1)
+                
+            d = np.sqrt(manifold.sqdist(Ei_exp, Ej_exp, c))
+            D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
+    
+    print(f"HPO distance matrix: {D_full.shape}")
+    if S is not None: 
+        D_full /= D_full.max()
+        simi = S[np.ix_(hpo_indices, hpo_indices)]
+        D_full -= D_full * simi  # éventuellement : alpha*simi
+
+    def compute_costs_grouped(
+        D_full, idx_i, idx_j, weights_i, weights_j, n, m, 
+        epsilon=0.05, device="cuda", max_batch_elems=2_000_000
+        ):
+        C = np.zeros((n, m), dtype=np.float32)
+        groups_i = group_by_length(idx_i, weights_i)   # {L: (positions, I(G,L), W(G,L))}
+        groups_j = group_by_length(idx_j, weights_j)
+        print(f"{len(groups_i)} tailles distinctes côté OMIM, {len(groups_j)} côté Orpha")
+
+        for Li, (pos_i, I, Wi) in tqdm(groups_i.items(), desc="Length groups (OMIM)"):
+            for Lj, (pos_j, J, Wj) in groups_j.items():
+                Gi, Gj = I.shape[0], J.shape[0]
+                chunk_size = max(1, max_batch_elems // (Li * Lj * Gj))
+                for gi_start in range(0, Gi, chunk_size):
+                    gi_end = min(gi_start + chunk_size, Gi)
+                    I_chunk = I[gi_start:gi_end] 
+                    Wi_chunk = Wi[gi_start:gi_end]
+                    g = I_chunk.shape[0]
+                    cost_block = D_full[I_chunk[:, None, :, None], J[None, :, None, :]]
+
+                    B = g * Gj
+                    Ms = torch.tensor(cost_block.reshape(B, Li, Lj), dtype=torch.float32)
+                    As = torch.tensor(np.repeat(Wi_chunk, Gj, axis=0), dtype=torch.float32)
+                    Bs = torch.tensor(np.tile(Wj, (g, 1)), dtype=torch.float32)
+
+                    costs = compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, device=device)
+                    costs = costs.reshape(g, Gj)
+
+                    rows = pos_i[gi_start:gi_end]
+                    C[np.ix_(rows, pos_j)] = costs
+        return C
+    return compute_costs_grouped(D_full, idx_i, idx_j, weights_i, weights_j, n, m)
