@@ -1,5 +1,3 @@
-import os
-os.chdir('/home/onyxia/work/OT_simulation_maladies')
 import pandas as pd
 import networkx as nx
 import requests, xml.etree.ElementTree as ET
@@ -9,7 +7,7 @@ import re
 hp_ids = []
 parents_list = []
 
-with open("data/HPOs.csv", "r") as f:
+with open("../data/HPOs.csv", "r") as f:
     next(f)
     for line in f:
         hp_id = line.split(';')[0]
@@ -47,7 +45,7 @@ def read_hpoa(path):
     return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
 
 
-df_hpoa = read_hpoa('data/phenotype_omim_orpha.hpoa')
+df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa')
 df_hpoa['disease_name'] = df_hpoa['disease_name'].str.lower().str.strip().str.replace(r'[\s\-]+', ' ', regex=True)
 df_hpoa.tail()
 
@@ -65,12 +63,12 @@ df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
 
 hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
 
-profils_omim = pd.read_csv("data/profils_omim.csv.gz", index_col=0)
+profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
 hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
 
 # Associations gène-maladie et PPI
-genes_to_disease = pd.read_csv("data/genes_to_disease.txt", sep="\t")
+genes_to_disease = pd.read_csv("../data/genes_to_disease.txt", sep="\t")
 genes_to_disease = genes_to_disease.drop(columns='source')
 
 ppi = pd.read_csv("https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", sep="," )
@@ -118,31 +116,31 @@ work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
 work_omim_exact = df_pivot[df_pivot['database_id'].isin(list_omim_exact)]
 work_orpha_exact = df_pivot[df_pivot['database_id'].isin(list_orpha_exact)]
 
-#df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
-#df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
+df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
+df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
 
-# df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
-    #ncbi_gene_id=("ncbi_gene_id", "first"),
-    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    #association_type=("association_type", "first"),
-    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    #annotation=("annotation", "first"),
-    #protein2=("protein2", list),
-    #combined_score=("combined_score", list)
-#)
-#df1_omim['n_proteins'] = df1_omim['protein'].apply(
-    #lambda x: len(set(x)) if isinstance(x, list) else 1
-#)
+df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
+    ncbi_gene_id=("ncbi_gene_id", "first"),
+    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
+    association_type=("association_type", "first"),
+    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
+    annotation=("annotation", "first"),
+    protein2=("protein2", list),
+    combined_score=("combined_score", list)
+)
+df1_omim['n_proteins'] = df1_omim['protein'].apply(
+    lambda x: len(set(x)) if isinstance(x, list) else 1
+)
 
-#df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
-    #ncbi_gene_id=("ncbi_gene_id", "first"),
-    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    #association_type=("association_type", "first"),
-    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    #annotation=("annotation", "first"),
-    #protein2=("protein2", list),
-    #combined_score=("combined_score", list)
-#)
-#df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
-    #lambda x: len(set(x)) if isinstance(x, list) else 1
-#)
+df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
+    ncbi_gene_id=("ncbi_gene_id", "first"),
+    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
+    association_type=("association_type", "first"),
+    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
+    annotation=("annotation", "first"),
+    protein2=("protein2", list),
+    combined_score=("combined_score", list)
+)
+df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
+    lambda x: len(set(x)) if isinstance(x, list) else 1
+)

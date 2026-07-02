@@ -28,7 +28,7 @@ def seuil_masse(P, gt_set, alphas=[0.10, 0.05], seed=42):
     n_scores = len(scores_calib)
     seuil = []
     for a in alphas:
-        q_level = np.ceil((n + 1) * (1 - a)) / n_scores
+        q_level = np.ceil((n_scores + 1) * (1 - a)) / n_scores
         seuil.append(np.quantile(scores_calib, q_level))
     return seuil
 
@@ -61,12 +61,12 @@ def seuil_rang(P, gt_set, alphas=[0.1, 0.05], seed=42):
     n_scores = len(scores_calib)
     seuil = []
     for a in alphas:
-        q_level = np.ceil((n + 1) * (1 - a)) / n_scores
+        q_level = np.ceil((n_scores + 1) * (1 - a)) / n_scores
         seuil.append(np.quantile(scores_calib, q_level))
     return seuil
 
 
-def construct_features(P, gt_set, seed=42):
+def construct_features(P, gt_set, target_k=0, seed=42):
     P_norm = P/P.sum(axis=1, keepdims=True)
     # Construction des features et de y
     top_1 = []
@@ -82,7 +82,7 @@ def construct_features(P, gt_set, seed=42):
         rank_true.append(rank[0] + 1)
         top_1.append(P_norm[i, ranked_cols[0]])
         ratio_12.append(P_norm[i, ranked_cols[0]]/P_norm[i, ranked_cols[1]])
-        if rank[0] == 0:
+        if rank[0] <= target_k:
             correct.append(True)
         else:
             correct.append(False)
@@ -90,7 +90,7 @@ def construct_features(P, gt_set, seed=42):
         concentration.append(-np.sum(line[line>0] * np.log(line[line>0])))
 
     X = pd.DataFrame({'top_1': top_1, 'ratio':ratio_12, 'rank':rank_true}).values
-    X=(X-X.mean())/X.std()
+    X = (X-X.mean())/X.std()
     y = correct
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=seed)
@@ -142,7 +142,7 @@ def evaluate_classifier(model, X_test, y_test, average="weighted", show_confusio
 
 def logistic_reg(P, gt_set, seed=42):
     X_train, X_test, y_train, y_test = construct_features(P, gt_set, seed)
-    model = LogisticRegression(penalty=None, max_iter=1000, random_state=42)
+    model = LogisticRegression(C=np.inf, max_iter=1000, random_state=42)
     model.fit(X_train, y_train)
     metrics = evaluate_classifier(model, X_test, y_test)
     return metrics
