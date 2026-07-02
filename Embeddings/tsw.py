@@ -188,7 +188,7 @@ def transport(C, epsilon, gt_set, a=None, b=None):
         print(epsilon)
         ot_plan_reg, ot_cots_reg = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
         ranks_reg, pairs_reg = evaluate_transport(ot_plan_reg, gt_set, C)
-        return ranks_reg, pairs_reg
+        return ranks_reg, pairs_reg, ot_plan_reg
 
 
 def propagate_terms(df, hpo_cols, ancestors, depths, k=None):
