@@ -86,49 +86,6 @@ df0 = pd.merge(genes_to_disease, doc, how='left', on='gene_symbol')
 df1 = pd.merge(df0, ppi, how='left', left_on="#string_protein_id", right_on="protein1")
 df1 = df1.drop(columns="protein1")
 
-'''
-# ======================================================================================
-# ===== Base de données de correspondances OMIM-ORPHA en fonction du gène indiqué ======
-# ======================================================================================
-
-df_gene_correspondence = find_gene_correspondence(genes_to_disease, 'disease_id', 'gene_symbol')
-df_gene_correspondence0 = df_gene_correspondence.loc[df_gene_correspondence['orpha_id'].isin(df_hpoa['database_id'])]
-
-list_omim = df_gene_correspondence0['omim_id'].unique()
-list_orpha = df_gene_correspondence0['orpha_id'].unique()
-
-gene_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
-gene_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
-print("gene_omim : ", gene_omim.shape)
-print("gene_orpha : ", gene_orpha.shape)
-
-df0 = pd.merge(genes_to_disease, doc, how='left', on='gene_symbol')
-df1 = pd.merge(df0, ppi, how='left', left_on="#string_protein_id", right_on="protein1")
-df1=df1.drop(columns="protein1")
-
-df1_orpha = pd.merge(gene_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
-df1_omim = pd.merge(gene_omim, df1, how='left', left_on='database_id', right_on='disease_id')
-
-df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
-    ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", "first"),
-    association_type=("association_type", "first"),
-    protein=("#string_protein_id", "first"),
-    annotation=("annotation", "first"),
-    protein2=("protein2", list),
-    combined_score=("combined_score", list)
-)
-df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
-    ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", "first"),
-    association_type=("association_type", "first"),
-    protein=("#string_protein_id", "first"),
-    annotation=("annotation", "first"),
-    protein2=("protein2", list),
-    combined_score=("combined_score", list)
-)
-print(f"df1_omim : {df1_omim.shape}\n df1_orpha : {df1_orpha.shape}")
-'''
 
 # ======================================================================================
 # ================== Correspondances issues d'Orphadata ================================

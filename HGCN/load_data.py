@@ -107,14 +107,8 @@ df_orpha_omim_exact = df_orpha_omim[df_orpha_omim["mapping_type"]=='E (Exact map
 list_omim = df_orpha_omim['omim_id'].unique()
 list_orpha = df_orpha_omim['orpha_id'].unique()
 
-list_omim_exact = df_orpha_omim_exact['omim_id'].unique()
-list_orpha_exact = df_orpha_omim_exact['orpha_id'].unique()
-
 work_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
 work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
-
-work_omim_exact = df_pivot[df_pivot['database_id'].isin(list_omim_exact)]
-work_orpha_exact = df_pivot[df_pivot['database_id'].isin(list_orpha_exact)]
 
 df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
 df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
