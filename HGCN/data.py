@@ -83,6 +83,8 @@ def load_data(args, hpo_graph, omim_df, ancestors, depths, p=0, cache_dir=".cach
         features = compute_structural_features(hpo_graph, nodes, node2idx, omim_features)
     else:
         features = omim_features
+        
+    print("Après compute structural features : ", features.shape)
     features = scipy.sparse.csr_matrix(features)
 
     zero_nodes = (omim_features.sum(axis=1) == 0).sum()
@@ -132,10 +134,9 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
     struct_features = struct_features / (struct_features.max(axis=0) + 1e-8)
 
     if not isinstance(omim_features, np.ndarray):
-        omim_features = np.array(omim_features)
+        omim_feat= np.array(omim_feat)
     
-    #features = np.hstack([omim_feat, struct_features])
-    features = struct_features
+    features = np.hstack([omim_feat, struct_features])
     return features
 
 

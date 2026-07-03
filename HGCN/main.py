@@ -91,7 +91,7 @@ def get_dir_name(models_dir):
 
 dt = datetime.datetime.now()
 date = f"{dt.year}_{dt.month}_{dt.day}"
-models_dir = os.path.join("HGCN/logs/", date)
+models_dir = os.path.join("logs/", date)
 save_dir = get_dir_name(models_dir)
 
 train(args, G_hpo_work, union_diseases, save_dir, ancestors, depths)
