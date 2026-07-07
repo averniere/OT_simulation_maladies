@@ -72,7 +72,7 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
         #ref = np.dot(np.abs(A[i, :] - B[j, :]), norms)
         #new = C[i, j]
         #print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
-    #return C
+    return C
 
 
 def cost_hpos(hpoi, hpoj):

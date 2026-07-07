@@ -137,7 +137,7 @@ def compute_structural_features(hpo_graph, nodes, node2idx, omim_features):
         omim_feat= np.array(omim_feat)
     
     features = np.hstack([omim_feat, struct_features])
-    return features
+    return struct_features
 
 
 def get_transitive_edges(hpo_graph, node2idx):

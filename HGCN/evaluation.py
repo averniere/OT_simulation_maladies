@@ -66,30 +66,6 @@ def seuil_rang(P, gt_set, alphas=[0.1, 0.05], seed=42):
     return seuil
 
 
-def seuil_termes_communs(df, gt_set, seed=42):
-    np.random.seed(seed)
-    P_norm = P/np.sum(P, axis=1, keepdims=True)
-    n = len(gt_set)
-    hpo_cols = [c for c in df.columns if c.startswith('HP')]
-
-    indices = np.random.permutation(n)
-    n_calib = int(0.2 * n)
-    calib_indices = indices[:n_calib]
-    test_indices = indices[n_calib:]
-
-    paires_calibration = [list(gt_set)[i] for i in calib_indices]
-    print(f"Taille du jeu de calibration : {len(paires_calibration)}")
-    paires_test = [list(gt_set)[i] for i in test_indices]
-    print(f"Taille du jeu de test : {len(paires_test)}")
-
-    communs = []
-    for i, _ in paires_calibration:
-        j = np.argmax(ot_plan_reg[i])
-        omim_row = df_omim.iloc[i][hpo_cols]
-        orpha_row = df_orpha.iloc[j][hpo_cols]
-
-
-
 def construct_features(P, gt_set, target_k=0, seed=42):
     P_norm = P/P.sum(axis=1, keepdims=True)
     # Construction des features et de y

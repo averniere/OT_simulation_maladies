@@ -22,7 +22,7 @@ def train(args, G_hpo, features, save_dir, ancestors, depths):
     print("Device : ", device)
     args.patience = args.epochs if not args.patience else int(args.patience)
 
-    data = load_data(args, G_hpo, features, ancestors, depths)
+    data = load_data(args, G_hpo, features, ancestors, depths, p=0)
     #zero_rows = np.where(data["features"].sum(axis=1) == 0)[0]
     args.n_nodes, args.feat_dim = data['features'].shape
     print(f"Dimension des features : {args.feat_dim}")

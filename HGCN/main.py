@@ -30,7 +30,7 @@ class Args:
     seed : int = 42
     normalize_adj: bool = True
     normalize_feats: bool = True
-    epochs : int = 3000
+    epochs : int = 4000
     min_epochs : int = 100
     patience : int = 200
     lr : float = 1e-2
@@ -50,7 +50,7 @@ class Args:
     local_agg : bool = False  # Local aggregation
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
-    dim : int = 30  # Dimension de l'embedding
+    dim : int = 50  # Dimension de l'embedding
     optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
     compute_structural : bool = True
 
