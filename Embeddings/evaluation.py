@@ -149,7 +149,7 @@ def logistic_reg(P, gt_set, seed=42):
     return metrics
 
 
-def seuil_commun(df1, df2, P, gt_set, rg=2):
+def seuil_commun(df1, df2, P, gt_set, rg=2, alpha=0.8):
     '''
     Trace g(x)=P(Y=1|X>=x) où Y Bernoulli égale à 1 si le match est dans le Top rg,
     et X indique le nombre de termes en commun entre les deux maladies de la paire.
@@ -206,8 +206,8 @@ def seuil_commun(df1, df2, P, gt_set, rg=2):
 
     fig, ax1 = plt.subplots(figsize=(9, 5))
     ax1.plot(x_values, g_values, marker='o', markersize=3, color='tab:blue', label='g(x)')
-    ax1.fill_between(x_values, lower_bounds, upper_bounds, color='tab:blue', alpha=0.2, label='IC 95% (Wilson)')
-    ax1.axhline(y=0.8, color='red', linestyle='--', label='y = 0.95')
+    ax1.fill_between(x_values, lower_bounds, upper_bounds, color='tab:blue', alpha=0.2, label=f'IC 95% (Wilson)')
+    ax1.axhline(y=alpha, color='red', linestyle='--', label=f"y = {alpha}")
     ax1.set_xlabel("x")
     ax1.set_ylabel("g(x)")
     ax1.set_ylim(0, 1.05)
@@ -220,3 +220,4 @@ def seuil_commun(df1, df2, P, gt_set, rg=2):
 
     plt.tight_layout()
     plt.show()
+    return x_values, g_values

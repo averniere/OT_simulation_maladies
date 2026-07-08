@@ -287,7 +287,7 @@ def compute_transport_sinkhorn(
     return optimal_plan_sinkhorn, optimal_cost_sinkhorn
 
 
-def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
+def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
     """
     Évalue le plan de transport P contre la vérité terrain.
     Inputs : 
@@ -301,30 +301,55 @@ def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
     pairs = {}
     ranks = []
     marginal = np.sum(P, axis=1)
-
-    for (i, j_true) in gt_set:
-        # Colonnes triées par masse décroissante pour la ligne i
-        ranked_cols = np.argsort(P[i])[::-1]
-        rank = np.where(ranked_cols == j_true)[0]
-        if len(rank) == 0:
-            continue
-        rank = rank[0] + 1
-        ranks.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
+    if exact : 
+        for (i, j_true) in gt_set:
+            # Colonnes triées par masse décroissante pour la ligne i
+            ranked_cols = np.argsort(P[i])[::-1]
+            rank = np.where(ranked_cols == j_true)[0]
+            if len(rank) == 0:
+                continue
+            rank = rank[0] + 1
+            ranks.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
         
-        for k in top_k:
-            if rank <= k:
-                results[k] += 1
-                if C is not None and (i, j_true) not in pairs.keys():
-                    pairs[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal[i]]
+            for k in top_k:
+                if rank <= k:
+                    results[k] += 1
+                    if C is not None and (i, j_true) not in pairs.keys():
+                        pairs[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal[i]]
                     
-        if C is not None and (i, j_true) not in pairs.keys():
-            pairs[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal[i]]
+            if C is not None and (i, j_true) not in pairs.keys():
+                pairs[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal[i]]
             
-    n = len(gt_set)
-    print(f"Paires évaluées : {n}")
-    for k in top_k:
-        print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
-    print(f" Rang moyen: {np.mean(ranks):.2f}")
+        n = len(gt_set)
+        print(f"Paires évaluées : {n}")
+        for k in top_k:
+            print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
+        print(f" Rang moyen: {np.mean(ranks):.2f}")
+    else:
+        for i in gt_set.keys():
+            ranked_cols = np.argsort(P[i])[::-1]
+            js = gt_set[i]
+            rank_j = []
+            for j in js:
+                rank = np.where(ranked_cols == j)[0]
+                if len(rank) == 0:
+                    continue
+                rank = rank[0] + 1
+                rank_j.append(rank)
+                for k in top_k:
+                    if rank <= k:
+                        results[k] += 1
+                        if C is not None and (i, j) not in pairs.keys():
+                            pairs[(i, j)]=[k, C[i, j], P[i, j]/marginal[i]]
+                if C is not None and (i, j) not in pairs.keys():
+                    pairs[(i, j)]=[0, C[i, j], P[i, j]/marginal[i]]
+            ranks.append(rank_j) # Rang de la vraie maladie j_true dans la matrice de transport
+              
+        n = len(gt_set)
+        print(f"Paires évaluées : {n}")
+        for k in top_k:
+            print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
+        #print(f" Rang moyen: {np.mean(ranks):.2f}")
 
     return ranks, pairs
 
