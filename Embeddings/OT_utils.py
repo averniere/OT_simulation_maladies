@@ -268,6 +268,7 @@ def compute_transport_sinkhorn(
     max_iters: int = 100000,
     tau: float = 1e-4,
     verbose: bool = False,
+    log: bool = False
     ):
     n = C.shape[0]
     m = C.shape[1]
@@ -277,7 +278,10 @@ def compute_transport_sinkhorn(
         b = np.ones(m)/m
     assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
     assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
-    optimal_plan_sinkhorn = sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
+    if log:
+        optimal_plan_sinkhorn = ot.bregman.sinkhorn_stabilized(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
+    else:
+        optimal_plan_sinkhorn = sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
     if verbose:
