@@ -89,7 +89,7 @@ def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):
     """
     Calcule la similarité entre chaque terme HPO selon l'article de Resnik. Calculer la similarité
     entre deux termes revient à prendre le maximum de l'information content parmi tous les parents
-    communs.
+    communs (Most Informative Common Ancestor).
     """
     colnames = [c for c in df.columns if c.startswith('HP:')]
     n = len(colnames)
