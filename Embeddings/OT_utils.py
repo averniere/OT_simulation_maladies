@@ -329,6 +329,7 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
         for k in top_k:
             print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
         print(f" Rang moyen: {np.mean(ranks):.2f}")
+        print(f" Rang médian: {np.median(ranks):.2f}")
     else:
         for i in gt_set.keys():
             ranked_cols = np.argsort(P[i])[::-1]
