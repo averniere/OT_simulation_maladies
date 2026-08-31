@@ -1,11 +1,12 @@
----Simulation Optimal Transport---
-Notre travail s'appuie sur l'hypothèse suivante : une maladie complexe correspond à une combinaison de maladies mendéliennes.
-Alors, pour valider notre modèle et avoir accès à un ground_truth, nous pouvons simuler plusieurs maladies complexes à partir de mendéliennes.
+# Transport optimal pour associer des maladies
 
-> data
-- profil_omim.csv.gz : contient en lignes les associations gènes-maladies monogéniques mendéliennes et en colonne les termes HPO (= phénotypes, par exemple HP:0002093 = insuffisance respiratoire). 
-- profil_phecodes.csv : (pas utilisé ici) contient en ligne les phecodes et en colonne les termes HPO  
+Ce dépôt contient le travail de stage de M2 autour de la construction d'une fonction de coût adaptée $c$ entre maladies. 
 
-> results : stockage des fichiers générés par les scripts
+## Organisation du dépôt 
 
-> script : pour lancer les simulations et obtenir un plot, il suffit de lancer create_replicates.py puis create_graph_ot.r
+Le dépôt s'articule autour des fichiers suivant :
+- `data`, contenant certaines bases de données (publiques) sur lesquelles repose le code ;
+- `Disease_Embeddings`, où l'on essaye de mettre en œuvre l'apprentissage d'une représentation des maladies dans le disque de Poincaré d'après la méthode de >Klimovskaia (2020);
+- `Embeddings`, où l'on apprend et l'on utilise une représentation de l'ontologie HPO dans le disque de Poincaré selon la méthode de >Nickel et Kiela (2017) ;
+- `HGCN`, où l'on apprend et l'on utilise une représentation de l'ontologie HPO dans le disque de Poincaré selon la méthode de >Chami et al. (2019) ; 
+- `OT`, qui contient le processus de simulations de maladies complexes.
