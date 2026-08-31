@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
@@ -75,23 +76,27 @@ def construct_features(P, gt_set, seed=42):
     rank_true = []
     correct = []
     concentration = []
+    sd = []
     for i, j in gt_set:
         ranked_cols = np.argsort(P[i])[::-1]
         rank = np.where(ranked_cols == j)[0]
         if len(rank) == 0:
             continue
         rank_true.append(rank[0] + 1)
-        top_1.append(P_norm[i, ranked_cols[0]])
+        top_1.append(P[i, ranked_cols[0]])
         p1, p2 = P_norm[i, ranked_cols[0]], P_norm[i, ranked_cols[1]]
         ratio_12.append(np.log(p1 + 1e-12) - np.log(p2 + 1e-12)) 
         correct.append(rank[0] == 0)
-        line = P[i, :]
+        line = P_norm[i, :]
         concentration.append(-np.sum(line[line>0] * np.log(line[line>0])))
+        sd.append(np.std(line))
 
     X = pd.DataFrame({
         'top_1': top_1, 
         'ratio': ratio_12, 
-        'concentration': concentration}).values
+        'std': sd,
+        #'concentration': concentration
+        }).values
     X = (X - X.mean(axis=0)) / X.std(axis=0)
     y = correct
 
@@ -153,7 +158,7 @@ def logistic_reg(P, gt_set, seuil=0.9, seed=42):
     model = LogisticRegression(class_weight='balanced', penalty=None, max_iter=1000, random_state=42)
     model.fit(X_train, y_train)
     metrics = evaluate_classifier(model, X_test, y_test)
-    coefs = pd.Series(model.coef_[0], index=['top_1', 'ratio_12', 'concentration'])
+    coefs = pd.Series(model.coef_[0], index=['top_1', 'ratio_12', 'sds'])
     print(coefs.sort_values(key=abs, ascending=False))
     proba_test = model.predict_proba(X_test)[:, 1]
     precision, recall, thresholds = precision_recall_curve(y_test, proba_test)
