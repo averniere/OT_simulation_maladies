@@ -154,14 +154,7 @@ def subtree_mass(mu, order_idx, parents_ptr, parents_flat, root_idx):
                 p = parents_flat[pi]
                 if p != root_idx:
                     for i in range(N):
-                        mu[i, p] += mu[i, k]
-            #k = self.node2id[node]
-            #p_list = self.parents[k]
-            #if len(p_list) > 0:
-                #for p in p_list:
-                    #if p != self.root:
-                        #i = self.node2id[p]
-                        #mu[:, i] += mu[:, k]
+                        mu[i, p] += mu[i, k]/len(range(start, end))
         return mu
 
 
@@ -182,12 +175,12 @@ def precompute_tsw_matrix(SM1, SM2, w):
 def transport(C, epsilon, gt_set, a=None, b=None):
     print("======== Sans régularisation ========")
     ot_plan, ot_cost = compute_transport(C, a, b)
-    ranks, pairs = evaluate_transport(ot_plan, gt_set, C)
+    ranks, _, pairs, _ = evaluate_transport(ot_plan, gt_set, C)
 
     print("======== Avec régularisation ========")
     print(epsilon)
     ot_plan_reg, ot_cots_reg = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
-    ranks_reg, pairs_reg = evaluate_transport(ot_plan_reg, gt_set, C)
+    ranks_reg, _, pairs_reg, _ = evaluate_transport(ot_plan_reg, gt_set, C)
     return ranks_reg, pairs_reg, ot_plan_reg
 
 

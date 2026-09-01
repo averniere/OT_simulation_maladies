@@ -1,6 +1,7 @@
 import pandas as pd
 import networkx as nx
 import requests, xml.etree.ElementTree as ET
+import urllib.request
 import re
 
 from data_utils import build_disease_correspondence, find_gene_correspondence
@@ -143,3 +144,137 @@ df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
 df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
     lambda x: len(set(x)) if isinstance(x, list) else 1
 )
+
+
+# ======================================================================================
+# ================== Maladies Orphanet depuis Orphadata ================================
+# ======================================================================================
+
+url = "https://www.orphadata.com/data/xml/en_product4.xml"
+local_file = "en_product4.xml"
+
+# Téléchargement
+urllib.request.urlretrieve(url, local_file)
+
+# Parsing
+tree = ET.parse(local_file)
+root = tree.getroot()
+
+rows = []
+for disorder in root.iter("Disorder"):
+    orpha_code = disorder.findtext("OrphaCode")
+    name = disorder.findtext("Name")
+    for assoc in disorder.iter("HPODisorderAssociation"):
+        rows.append({
+            "disease_id": f"ORPHA:{orpha_code}",
+            "Disorder": name,
+            "HPO_id": assoc.findtext("HPO/HPOId"),
+            "HPOTerm": assoc.findtext("HPO/HPOTerm"),
+            "Frequency": assoc.findtext("HPOFrequency/Name"),
+        })
+
+deprecated={
+    'HP:0006887':'HP:0001249',
+    'HP:0002275':'HP:0002311',
+    'HP:0002370':'HP:0002311',
+    'HP:0002438':'HP:0001317',
+    'HP:0004059':'HP:0006433',
+    'HP:0005365':'HP:0010976',
+    'HP:0005435':'HP:0011840',
+    'HP:0005807':'HP:0009881',
+    'HP:0007543':'HP:0000962',
+    'HP:0007680':'HP:0007894',
+    'HP:0007850':'HP:0030666',
+    'HP:0007898':'HP:0012231',
+    'HP:0009062':'HP:0008936',
+    'HP:0010064':'HP:0010091',
+    'HP:0012178':'HP:0012177',
+    'HP:0030050':'HP:0002524',  # Suspect
+    'HP:0031014':'HP:0031632',
+    'HP:0100786':'HP:0001262',
+    'HP:0200065':'HP:0000533',
+    'HP:0008014':'HP:0032416',
+    'HP:0008715':'HP:0008733',
+    'HP:0009773':'HP:0009700',
+    'HP:0012509':'HP:0034591',
+    'HP:0025237':'HP:6000456',
+    'HP:0025239':'HP:0025240',
+    'HP:0030220':'HP:0000719',
+    'HP:0031297':'HP:0011643',
+    'HP:0032172':'HP:0033661',
+    'HP:0031530':'HP:0031528',
+    'HP:0030638':'HP:0007642',
+    'HP:0031349':'HP:0011540',
+    'HP:0030639':'HP:0007642',
+    'HP:0045080':'HP:0005403'
+}
+
+orphadata = pd.DataFrame(rows)
+orphadata['HPO_id'] = orphadata['HPO_id'].replace(deprecated)
+
+pivot = orphadata[['disease_id', 'HPO_id']].drop_duplicates()
+pivot['values'] = 1.
+pivot = pd.pivot_table(data=pivot, values='values', index='disease_id', columns='HPO_id', aggfunc='max', fill_value=0)
+pivot.columns.name = None
+pivot = pivot.reset_index()
+
+all_columns = work_omim.columns.union(pivot.columns)
+
+pivot_aligned = pivot.reindex(columns=all_columns, fill_value=0).drop(columns=['database_id'])
+work_omim2 = work_omim.reindex(columns=all_columns, fill_value=0).drop(columns=['disease_id'])
+
+work_orpha2 = pivot_aligned[pivot_aligned['disease_id'].isin(list_orpha)]
+work_orpha2 = work_orpha2.rename(columns={'disease_id':'database_id'})
+
+
+# ======================================================================================
+# ================== Bases avec les fréquences =========================================
+# ======================================================================================
+
+def convert_frequency(
+    freq, dico={'HP:0040283':0.05,'HP:0040280':1.,'HP:0040282':0.3,'HP:0040285':-1,'HP:0040281':0.8,'HP:0040284':0.01}
+    ):
+    if pd.isna(freq):
+        return 0.
+    freq = str(freq).strip()
+    if freq.startswith('HP'):
+        return dico[freq]
+    if re.search(r"[0-9]\/[0-9]", freq):
+        num, den = freq.split("/")
+        return float(num) / float(den)
+    if freq.endswith("%"):
+        return float(freq[:-1]) / 100
+
+df_hpoa["value"] = df_hpoa.apply(lambda row: convert_frequency(row.get('frequency')), axis=1)
+
+matrix = df_hpoa.pivot_table(
+    index="database_id",
+    columns="hpo_id",
+    values="value",
+    aggfunc="first",
+    fill_value=0
+)
+matrix.columns.name = None
+matrix = matrix.reset_index()
+
+work_omimF = matrix[matrix['database_id'].isin(list_omim)]
+work_orphaF = matrix[matrix['database_id'].isin(list_orpha)]
+
+dico = {'Very frequent (99-80%)':0.8,
+'Frequent (79-30%)':0.3,
+'Occasional (29-5%)':0.05,
+'Very rare (<4-1%)':0.01,
+'Excluded (0%)':-1.,
+'Obligate (100%)':1.}
+orphadata['value'] = orphadata['Frequency'].replace(dico)
+
+matrix_orpha = orphadata.pivot_table(
+    index="disease_id",
+    columns="HPO_id",
+    values="value",
+    aggfunc="first",
+    fill_value=0
+)
+matrix_orpha.columns.name = None
+matrix_orpha = matrix_orpha.reset_index()
+work_orphaF2 = matrix_orpha[matrix_orpha['disease_id'].isin(list_orpha)]
