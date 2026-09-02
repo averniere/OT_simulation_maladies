@@ -277,4 +277,9 @@ matrix_orpha = orphadata.pivot_table(
 )
 matrix_orpha.columns.name = None
 matrix_orpha = matrix_orpha.reset_index()
+
+matrix_orpha = matrix_orpha.reindex(columns=all_columns, fill_value=0).drop(columns=['database_id'])
+work_omimF2 = work_omimF.reindex(columns=all_columns, fill_value=0).drop(columns=['disease_id'])
+
 work_orphaF2 = matrix_orpha[matrix_orpha['disease_id'].isin(list_orpha)]
+work_orphaF2 = work_orphaF2.rename(columns={'disease_id':'database_id'})

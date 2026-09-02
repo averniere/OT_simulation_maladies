@@ -185,16 +185,28 @@ def transport(C, epsilon, gt_set, a=None, b=None):
 
 
 def propagate_terms(df, hpo_cols, ancestors, depths, k=None):
+    '''
+    Pour propager les termes HPO jusqu'à k ancêtres. Compatible avec des annotations non-binaires, 
+    avec les fréquences d'apparition du terme dans [0,1]
+    Entrées :
+        - df : dataset de maladies,
+        - hpo_cols : liste des colonnes de termes HPO ([c for c in df.columns if c.startswith('HP')]),
+        - ancestors : dictionnaire des ancêtres des termes HPO dans l'ontologie,
+        - depths : dictionnaire des profondeurs dans l'ontologie,
+        - k : profondeur jusqu'où on souhaite propager.
+    Sortie :
+        - df_out : dataset de maladies avec propagation ancestrale jusqu'au niveau k.
+    '''
     mat = df[hpo_cols].to_numpy().copy()
     col2idx = {c: i for i, c in enumerate(hpo_cols)}
     for row in mat:
-        active_terms = [hpo_cols[i] for i, v in enumerate(row) if v == 1]
+        active_terms = [hpo_cols[i] for i, v in enumerate(row) if v > 0]
         for term in active_terms:
             for anc in ancestors.get(term, []):
                 if anc not in col2idx:
                     continue
                 if k is None or depths[term] - depths[anc] <= k:
-                    row[col2idx[anc]] = 1
+                    row[col2idx[anc]] = min(row[col2idx[anc]]+row[col2idx[term]], 1)  # Au cas où plusieurs termes actifs auraient le même parent.
     df_out = df.copy()
     df_out[hpo_cols] = mat
     return df_out

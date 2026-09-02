@@ -58,11 +58,7 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
     
     A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
     B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
-    #for i_start in tqdm(range(0, n, block_size)):
-        #i_end = min(i_start + block_size, n)
-        #block = omim_matrix[i_start:i_end]
-        #diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
-        #C[i_start:i_end] = (diff * norms).sum(axis=2)
+
     Aw = A * norms
     Bw = B * norms
 
@@ -201,6 +197,13 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
 
 
 def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
+    '''
+    Entrées :
+        - df_omim, df_orpha : deux bases de maladies annotées,
+        - weights : dictionnaire de la forme {terme HPO: pondération}
+    Sortie :
+        - Matrice des dissimilarités de Hamming pondérées entre paires de maladies.
+    '''
     n = df_omim.shape[0]
     m = df_orpha.shape[0]
     C = np.zeros((n, m))
@@ -212,11 +215,9 @@ def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
     A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
     B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
     
-    # for i_start in tqdm(range(0, n, block_size)):
-        # i_end = min(i_start + block_size, n)
-        # block = omim_matrix[i_start:i_end]
-        # diff = np.abs(block[:, None, :] - orpha_matrix[None, :, :])
-        # C[i_start:i_end] = (diff * weights_vector).sum(axis=2)
+    A = (A > 0).astype(int)  # Transformation en des datasets binaires dans le cas où on a des fréquences
+    B = (B > 0).astype(int)  # Transformation en des datasets binaires dans le cas où on a des fréquences
+
     Aw = A * w
     Bw = B * w
     C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
@@ -225,7 +226,7 @@ def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
 
 def basic_cost_matrix(df_omim, df_orpha, dist_method):
     """
-    Inputs:
+    Entrées:
         - df_omim, df_orpha : dataframes de maladies source et destination.
         - dist_method : 'euclidean', 'hamming', 'jaccard' 
     """

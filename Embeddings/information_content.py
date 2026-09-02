@@ -38,6 +38,20 @@ def get_ancestors0(G, node):
 
 
 def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
+    '''
+    Entrées :
+        - df_omim : dataset de maladies annotées,
+        - G_hpo : graphe de l'ontologie HPO,
+        - deprecated : liste de termes apparaissant dans les maladies et mis à jour depuis.
+    Sortie :
+        - Dictionnaire qui associe à chaque terme HPO apparaissant dans au moins une maladie la 
+        valeur de l'IC.
+        - diseases : dictionnaire {terme HPO : liste des maladies qui le contiennent}
+        - all_diseases : dictionnaire {terme HPO : maladies qui le contiennent avec propagation ancestrale}
+    NB : On pondère sur l'ensemble des noeuds du graphe, pas juste sur les maladies. Du point de vue
+    de l'interprétation c'est moins élégant, car on n'a pas de probabilité d'apparition dans une maladie,
+    mais au niveau des résultats c'est un peu mieux. 
+    '''
     colnames = [c for c in df_omim.columns if c.startswith('HP:')]
     hp_matrix = df_omim[colnames].values
     ids = df_omim.index.tolist()
@@ -52,39 +66,25 @@ def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
             ancestors[term]=get_ancestors0(G_hpo, term)
         return ancestors[term]
 
-    row_idxs, col_idxs = np.where(hp_matrix == 1)
+    row_idxs, col_idxs = np.where(hp_matrix > 0)
     for row_idx, col_idx in zip(row_idxs, col_idxs):
         disease_id = ids[row_idx]
-        term = colnames[col_idx]
+        term = colnames[col_idx]  # terme HPO
         resolved = deprecated.get(term, term)
         
-        weights[resolved] += 1
+        weights[resolved] += hp_matrix[row_idx, col_idx]  #1
         diseases[resolved].add(disease_id)
         all_diseases[resolved].add(disease_id)
         
         for ancestor in get_ancestors(resolved):
-            weights[ancestor] += 1
+            weights[ancestor] += hp_matrix[row_idx, col_idx]  #1
             all_diseases[ancestor].add(disease_id)
 
     total = sum(weights.values())
     return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+    # return {t: w /df_omim.shape[0]  for t, w in weights.items()}, diseases, all_diseases
 
-    '''
-    for id, row in df_omim.iterrows():
-        for term in colnames:
-            if row[term]==1:
-                resolved = deprecated.get(term, term)
-                weights[resolved]+=1
-                diseases[resolved].add(id)
-                all_diseases[resolved].add(id)
-                for ancestor in get_ancestors(resolved):
-                    weights[ancestor]+=1
-                    all_diseases[ancestor].add(id)
-    total = sum(weights.values())
-    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
-'''
-
-
+    
 def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):
     """
     Calcule la similarité entre chaque terme HPO selon l'article de Resnik. Calculer la similarité

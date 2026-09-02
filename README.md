@@ -33,3 +33,18 @@ Les codes des fonctions de coûts sont dans les fichiers `OT.py` ou `OT_utils.py
 Les différents dossiers contiennent un ou plusieurs notebooks d'analyse des résultats. Les plus importants sont les fichiers `test.ipynb` dans les dossiers `Embeddings`et `HGCN`.<br>
 
 Le fichier `evaluation.py` du dossier `Embeddings` permet de construire le modèle de régression logistique pour prédire la validité ou non d'une association. Attention, de même fichier dans le dossier `HGCN` n'est pas à jour.
+
+## Où retrouver les fonctions Python utiles
+
+Dans le dossier `Embeddings`:
+- `information_content.py` : 
+    - *compute_information_content* : calculer l'IC des termes HPO à partir d'une base de données de maladies.
+- `OT_utils.py` : 
+    - *basic_cost_matrix* : calculer la matrice de coût associée aux dissimilarités de Jaccard, Hamming ou à la distance euclidienne.
+    - *compute_cost_matrix* : calculer la matrice de coût entre barycentres dans le disque de Poincaré.
+    - *cost_matrix_hamm* : calculer la matrice de coût associée à la dissimilarité de Hamming avec une pondération quelconque. 
+    - *compute_cost_matrix_pseudo_jacc* : calculer la matrice de coût associée à la dissimilarité de Hamming, pondérée par la distance à l'origine des termes HPO dans le disque de Poincaré.
+    - *compute_cost_wasserstein2* : calculer la matrice de coût associée aux distances de Wasserstein entre maladies dans le disque de Poincaré. 
+    - *compute_transport* : retourne le plan de transport optimal et le coût optimal d'un problème de transport 
+- `tsw.py` : 
+    - *propagate_terms* : construire une base d'annotations avec propagation ancestrale jusqu'à un niveau souhaité $k$.
