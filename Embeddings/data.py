@@ -4,8 +4,7 @@ import requests, xml.etree.ElementTree as ET
 import urllib.request
 import re
 
-from data_utils import build_disease_correspondence, find_gene_correspondence
-
+from data_utils import build_disease_correspondence
 hp_ids = []
 parents_list = []
 
@@ -91,7 +90,7 @@ df1 = df1.drop(columns="protein1")
 # ======================================================================================
 # ================== Correspondances issues d'Orphadata ================================
 # ======================================================================================
-
+print("1")
 url = "https://www.orphadata.com/data/xml/en_product1.xml"
 response = requests.get(url)
 response.raise_for_status()
@@ -119,37 +118,37 @@ work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
 df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
 df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
 
-df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
-    ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    association_type=("association_type", "first"),
-    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    annotation=("annotation", "first"),
-    protein2=("protein2", list),
-    combined_score=("combined_score", list)
-)
-df1_omim['n_proteins'] = df1_omim['protein'].apply(
-    lambda x: len(set(x)) if isinstance(x, list) else 1
-)
+#df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
+    #ncbi_gene_id=("ncbi_gene_id", "first"),
+    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
+    #association_type=("association_type", "first"),
+    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
+    #annotation=("annotation", "first"),
+    #protein2=("protein2", list),
+    #combined_score=("combined_score", list)
+#)
+#df1_omim['n_proteins'] = df1_omim['protein'].apply(
+    #lambda x: len(set(x)) if isinstance(x, list) else 1
+#)
 
-df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
-    ncbi_gene_id=("ncbi_gene_id", "first"),
-    gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    association_type=("association_type", "first"),
-    protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    annotation=("annotation", "first"),
-    protein2=("protein2", list),
-    combined_score=("combined_score", list)
-)
-df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
-    lambda x: len(set(x)) if isinstance(x, list) else 1
-)
+#df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
+    #ncbi_gene_id=("ncbi_gene_id", "first"),
+    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
+    #association_type=("association_type", "first"),
+    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
+    #annotation=("annotation", "first"),
+    #protein2=("protein2", list),
+    #combined_score=("combined_score", list)
+#)
+#df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
+    #lambda x: len(set(x)) if isinstance(x, list) else 1
+#)
 
 
 # ======================================================================================
 # ================== Maladies Orphanet depuis Orphadata ================================
 # ======================================================================================
-
+print("2")
 url = "https://www.orphadata.com/data/xml/en_product4.xml"
 local_file = "en_product4.xml"
 
@@ -230,7 +229,7 @@ work_orpha2 = work_orpha2.rename(columns={'disease_id':'database_id'})
 # ======================================================================================
 # ================== Bases avec les fréquences =========================================
 # ======================================================================================
-
+print("3")
 def convert_frequency(
     freq, dico={'HP:0040283':0.05,'HP:0040280':1.,'HP:0040282':0.3,'HP:0040285':-1,'HP:0040281':0.8,'HP:0040284':0.01}
     ):

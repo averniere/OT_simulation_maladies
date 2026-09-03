@@ -34,7 +34,7 @@ Les différents dossiers contiennent un ou plusieurs notebooks d'analyse des ré
 
 Le fichier `evaluation.py` du dossier `Embeddings` permet de construire le modèle de régression logistique pour prédire la validité ou non d'une association. Attention, de même fichier dans le dossier `HGCN` n'est pas à jour.
 
-## Où retrouver les fonctions Python utiles
+## Où trouver les fonctions Python utiles
 
 Dans le dossier `Embeddings`:
 - `information_content.py` : 

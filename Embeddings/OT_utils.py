@@ -118,11 +118,24 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
         Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
         le vecteur de poids uniformes associés.
         '''
-        #terms, weights = [], []
-        #for _, row in df.iterrows():
-            #active = f_active_terms(row, hpo_cols, node2id_w, deprecated)
-            #terms.append(active)
-            #weights.append(np.ones(len(active)) / len(active) if active else np.array([]))
+        X = df[hpo_cols].to_numpy(dtype=float)
+        resolved_cols = np.array([deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], dtype=object)
+        valid_mask = resolved_cols != None
+        X_valid = X[:, valid_mask]
+        resolved_valid = resolved_cols[valid_mask]
+
+        terms = []
+        weights = []
+        for row in X_valid:
+            active_mask = row > 0 
+            row_terms = list(resolved_valid[active_mask])
+            row_values = row[active_mask]
+            total = row_values.sum()
+            row_weights = row_values / total if total > 0 else np.array([])
+            terms.append(row_terms)
+            weights.append(row_weights)
+        return terms, weights
+    '''
         X = df[hpo_cols].to_numpy(dtype=bool)
         resolved_cols = np.array(
             [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
@@ -133,7 +146,7 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
         terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
         weights = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
         return terms, weights
-
+'''
     terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
     terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
     print("Finished !")
@@ -173,18 +186,30 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
                 D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
     
     print(f"HPO distance matrix: {D_full.shape}")
+    #valid_is = [i for i in range(len(df_omim)) if idx_i[i]]
+    #valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
+    
+    def self_transport(idx, w):
+        M = D_full[np.ix_(idx, idx)]
+        reg = 0.1 * np.mean(M)
+        _, val = compute_transport_sinkhorn(M, w, w, reg)
+        return val
+
+    #b_cache = {i: self_transport(idx_i[i], weights_i[i]) for i in valid_is}
+    #c_cache = {j: self_transport(idx_j[j], weights_j[j]) for j in valid_js}
 
     def compute_row(i):
         if not idx_i[i]:
             return i, np.zeros(len(terms_j))
-        # Ei = E[idx_i[i]]
         row = np.zeros(len(terms_j))
         valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
         for j in valid_js:
-            # Ej = E[idx_j[j]]
-            # M = cost_hpos(Ei, Ej) 
-            M = D_full[np.ix_(idx_i[i], idx_j[j])]
-            _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
+            M_ij = D_full[np.ix_(idx_i[i], idx_j[j])]
+            #M_mean = np.mean(M_ij)
+            #reg = 0.1*M_mean
+            _, row[j] = compute_transport(M_ij, weights_i[i], weights_j[j])
+            #_, a = compute_transport_sinkhorn(M_ij, weights_i[i], weights_j[j], reg)
+            #row[j] = a - (b_cache[i]+c_cache[j])/2
         return i, row
     
     results = Parallel(n_jobs=-1)(
@@ -283,6 +308,7 @@ def compute_transport_sinkhorn(
         optimal_plan_sinkhorn = ot.bregman.sinkhorn_stabilized(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
     else:
         optimal_plan_sinkhorn = sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
+        #optimal_plan_sinkhorn = ot.bregman.sinkhorn_epsilon_scaling(a, b, C, )
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
     if verbose:

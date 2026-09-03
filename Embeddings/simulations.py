@@ -2,18 +2,12 @@
 import torch
 import pandas as pd
 import numpy as np
-import networkx as nx
-import re 
+import OT_utils as otu
 
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
-from scipy.spatial.distance import cdist
-from poincare import PoincareManifold
-from model import Distance_PE
-from information_content import deprecated, compute_information_content
 from data_utils import *
-from OT_utils import *
 from frlc0 import *
 
 
@@ -180,6 +174,9 @@ def add_noise_to_matrix(matrix, noise_level):
     Exemple : noise_level = 0.1
         Si 100 "1" dans la matrice, on en prend 10 et on les change en 0
         Si 300 "0" dans la matrice, on en prend 30 et on les change en 1
+
+    Idée : Changer les valeurs avec une probabilité qui va dépendre du changement induit dans
+    la matrice de coût.
     """
     if noise_level == 0:
         return matrix.copy()
@@ -276,52 +273,6 @@ def similarity_matrix(df, mendelian_list):
     return (matrice_binaire, maladies_mendeliennes_totale)
 
 
-def similarity_by_hpo(df, mendelian_list, source_data, weights=None, method=None):
-    '''
-    Input : 
-        - source_data : dataframe avec les maladies mendéliennes, source_data_filtre ou source_data
-        - weights : IC de la forme -log(p(c))
-        - method : si weights n'est pas None, soit 'cosine', soit 'weighted jaccard'.
-    Output : 
-        - matrice de similarités entre maladies : deux maladies sont similaires si elles partagent
-        un certain nombre de termes HPO en commun (idéalement, il faudrait pondérer par l'information
-        content).
-    ''' 
-    maladies_mendeliennes_df = set()
-    for sublist in df['Mendelian_Sources'].str.split(','):   # pour chaque ligne, on split par virgule
-        for m in sublist:                                    # pour chaque mendélienne dans la liste
-            maladies_mendeliennes_df.add(int(m.strip()))
-    maladies_mendeliennes_totale = list(sorted(
-        maladies_mendeliennes_df.union({int(m) for m in mendelian_list})))  # Ajouter des maladies supplémentaires
-    source_data = source_data.reindex(maladies_mendeliennes_totale)
-
-    if weights is None:
-        # On calcule la matrice de similarités par les coefficients de Jaccard
-        X = source_data.to_numpy().astype(bool)
-        intersection = X @ X.T
-        active = np.sum(X, axis=1)
-        union = active[:, None] + active[None, :] - intersection  # (a+b)+(a+c)-a
-        similarity = np.where(union > 0, intersection / union, 0.0)  # Jaccard coefficient
-    else: 
-        if method == 'cosine':  # Cosine
-            hpo_cols = source_data.columns
-            X = source_data.to_numpy().astype(float)
-            weight0 = np.array([weights.get(h, 0.0) for h in hpo_cols])
-            X0 = X * weight0
-            norms = np.linalg.norm(X0, axis=1, keepdims=True)
-            norms = np.where(norms == 0, 1, norms)
-            X_norm = X0 / norms
-            similarity = X_norm @ X_norm.T
-        if method == 'weighted jaccard':
-            hpo_cols = source_data.columns
-            X = source_data.to_numpy().astype(bool)
-            weight0 = np.array([weights.get(h, 0.0) for h in hpo_cols])
-            distance_matrix = cdist(X, X, metric='jaccard', w=weight0)
-            similarity = 1 - distance_matrix
-    return (similarity, maladies_mendeliennes_totale)
-
-
-# Random S : A MODIFIER
 def dissimilarity_matrix(similarity):
     #Compter le nombre total de 1
     num_ones = int(np.sum(similarity))
@@ -391,7 +342,6 @@ def evaluate_rank(ot_plan_df, df_truth):
     return np.mean(errors) if errors else np.nan
         
 
-
 def process_simulation(
     source_data, 
     n_complex_list, 
@@ -407,15 +357,12 @@ def process_simulation(
     deprecated,
     cost_method=None,
     weights_cost=None,
-    weights_simi=None,
-    simi_method=None,
     transp_method=None,
     ):
 
     #global_result = pd.DataFrame()
     all_results = []
     all_truths = []
-    #global_truth = pd.DataFrame()
 
     for overlap_rate in overlap_test:
         for n_complex in n_complex_list:
@@ -432,12 +379,7 @@ def process_simulation(
 
                 # Créer la matrice de similarité S
                 df_simi = df_truth.copy()
-                # similarity = similarity_matrix(df_simi, mendelian_list)
-                print("Compute similarity matrix...")
-                similarity = similarity_by_hpo(
-                    df_simi, mendelian_list, source_data_filtre.copy(), 
-                    weights=weights_simi, method=simi_method)
-                print("Done !")
+                similarity = similarity_matrix(df_simi, mendelian_list)
                 source_data_filtre = source_data_filtre.reindex(similarity[1])
 
                 complementary_matrices = {
@@ -462,11 +404,13 @@ def process_simulation(
                     print(source_data_filtre.shape)
                     print(noisy_matrix.shape)
                     if cost_method == 'wasserstein':
-                        cost_matrix = compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
-                    elif cost_method == 'pseudo hamm':
-                        cost_matrix = cost_matrix_hamm(source_data_filtre, noisy_matrix, weights_cost)
-                    elif cost_method == 'pseudo hamm embed':
-                        cost_matrix = compute_cost_matrix_pseudo_jacc(source_data_filtre, noisy_matrix, node2id, model)
+                        cost_matrix = otu.compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
+                    elif cost_method == 'hamming pondéré':
+                        cost_matrix = otu.cost_matrix_hamm(source_data_filtre, noisy_matrix, weights_cost)
+                    elif cost_method == 'hamming pondéré normes':
+                        cost_matrix = otu.compute_cost_matrix_pseudo_jacc(source_data_filtre, noisy_matrix, node2id, model)
+                    elif np.isin(cost_method, ['hamming', 'jaccard']):
+                        cost_matrix = otu.basic_cost_matrix(source_data_filtre, noisy_matrix, cost_method)
                     print("Cost matrix :", cost_matrix.shape)
                     print(f"Mean = {np.mean(cost_matrix)}")
                     print(f"Min = {np.min(cost_matrix)}")
@@ -489,7 +433,7 @@ def process_simulation(
                     epsilon0 = epsilon*np.mean(cost_matrix)
                     print("Regularization, epsilon : ", epsilon0)
                     if transp_method == 'classic':
-                        ot_plan, ot_cost = compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
+                        ot_plan, _ = otu.compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
                     elif transp_method == 'frlc':
                         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                         cost_matrix_torch = torch.tensor(cost_matrix, dtype=torch.float64).to(device)
@@ -497,9 +441,10 @@ def process_simulation(
                         print(f'Gamma: {gamma}')
                         ot_plan_torch, err = FRLC_opt(cost_matrix_torch, None, None, None, None, 50, 50, gamma)
                         ot_plan = ot_plan_torch.detach().cpu().numpy()
+                    #elif transp_method == 'unbalanced':
                     print("Finished !")
                     transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
-                    OT_type = "OT"
+                    OT_type = f"OT-{cost_method}"
                     ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
                     ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
                     ot_results["eta"] = 0.0
@@ -534,109 +479,3 @@ def process_simulation(
     return global_result, df_truth, target_data
 
 
-# Débuggage du code 
-hp_ids = []
-parents_list = []
-
-with open("../data/HPOs.csv", "r") as f:
-    next(f)
-    for line in f:
-        hp_id = line.split(';')[0]
-        
-        # Extraire uniquement la liste contenant des IDs HP:XXXXXXX
-        match = re.search(r"\[([^\]]*'HP:\d{7}'[^\]]*)\]", line)
-        if match:
-            parents = re.findall(r"HP:\d{7}", match.group(0))
-        else:
-            parents = []
-        
-        hp_ids.append(hp_id)
-        parents_list.append(parents)
-
-df_hpo = pd.DataFrame({'hp_id': hp_ids, 'parents': parents_list})
-
-G_hpo_work = nx.DiGraph()
-for hp_id in hp_ids:
-    G_hpo_work.add_node(hp_id)
-for hp_id, parents in zip(hp_ids, parents_list):
-    for parent_id in parents:
-        if parent_id in G_hpo_work:
-            G_hpo_work.add_edge(hp_id, parent_id)
-
-objects_w = list(G_hpo_work.nodes())
-node2id_w = {n: i for i, n in enumerate(objects_w)}
-root = "HP:0000001"
-depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
-
-
-def read_hpoa(path):
-    with open(path, 'r') as f:
-        skip = sum(1 for line in f if line.startswith('#'))
-    return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
-
-
-df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa')
-df_hpoa['disease_name'] = df_hpoa['disease_name'].str.lower().str.strip().str.replace(r'[\s\-]+', ' ', regex=True)
-df_hpoa.tail()
-
-correspondence_exacte = build_disease_correspondence(df_hpoa)
-print(f"Correspondances trouvées : {len(correspondence_exacte)}")
-
-# Construction de deux dataframes à partir de df_hpoa
-df_pivot = df_hpoa[['database_id', 'hpo_id']].drop_duplicates()
-df_pivot['values']=1.
-df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', columns='hpo_id', aggfunc='max', fill_value=0)
-df_pivot.columns.name = None
-df_pivot = df_pivot.reset_index()
-
-df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
-df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
-
-df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
-df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
-
-hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
-
-profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
-profils_omim = profils_omim.reset_index()
-hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
-weights, diseases, all_diseases = compute_information_content(profils_omim, G_hpo_work)
-ic = {t: -np.log(weights[t]) if weights.get(t, 0) > 0 else 0.0 for t in weights}
-
-checkpoint = torch.load('logs/2026_5_7/12/model_final.pt', map_location='cpu', weights_only=False)
-objects = checkpoint['objects']
-hp = checkpoint['hyperparams']
-
-manifold = PoincareManifold()
-model = Distance_PE(
-    n=len(objects), dim=hp['dim'],
-    manifold=manifold, sparse=False, 
-    learn_curvature=False, init_curvature=1., 
-    weight_decay=0
-    )
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
-
-results, df_truth, df_target = process_simulation(
-    source_data=profils_omim[hpo_cols0],
-    n_complex_list=[50],               
-    n_match_list=[25],  # [10 , 50],              
-    noise_levels=[0, 0.1, 0.2],  # [0, 0.05, 0.1, 0.2],   
-    quantiles=list(np.arange(0.95, 0.999, 0.003)),
-    epsilon=0.1,
-    overlap_test=[0, 0.5],    
-    group_size=10,                     
-    eta_list=[1e5, 1e6],
-    model=model,
-    node2id=node2id_w,
-    deprecated=deprecated,
-    cost_method='wasserstein',  # 'wasserstein' ou 'pseudo hamm' ou 'pseudo hamm embed'
-    weights_cost=depths,
-    weights_simi=None,
-    simi_method=None,  # 'cosine' ou 'weighted jaccard'
-    transp_method='frlc'  # 'classic' ou 'frlc'
-)
-
-results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
-df_target.to_csv("simuls/target.csv", sep=';', index=False)
-df_truth.to_csv("simuls/truth.csv", sep=';', index=False)
