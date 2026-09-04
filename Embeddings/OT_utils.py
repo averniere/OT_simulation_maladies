@@ -270,7 +270,24 @@ def basic_cost_matrix(df_omim, df_orpha, dist_method):
     print("Check :", distance_matrix.shape)
     return distance_matrix
 
-    
+
+def pearson_corr(A, B, eps=1e-10):
+    A_mean = A - np.mean(A, axis=1, keepdims=True)
+    B_mean = B - np.mean(B, axis=1, keepdims=True)
+    A_norm = A_mean / np.maximum(np.linalg.norm(A_mean, axis=1, keepdims=True), eps)
+    B_norm = B_mean / np.maximum(np.linalg.norm(B_mean, axis=1, keepdims=True), eps)
+
+    return A_norm @ B_norm.T
+
+
+def correlation_cost(df1, df2):
+    hpo_cols = [c for c in df1.columns if c.startswith('HP')]
+    X = df1[hpo_cols].to_numpy(dtype=float)
+    Y = df2[hpo_cols].to_numpy(dtype=float)
+    C = pearson_corr(X, Y)
+    return 1-C
+
+
 def compute_transport(
     C: np.ndarray,
     a: np.ndarray,

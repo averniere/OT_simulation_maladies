@@ -419,6 +419,8 @@ def process_simulation(
                         cost_matrix = otu.compute_cost_matrix_pseudo_jacc(source_data_filtre, noisy_matrix, node2id, model)
                     elif np.isin(cost_method, ['hamming', 'jaccard']):
                         cost_matrix = otu.basic_cost_matrix(source_data_filtre, noisy_matrix, cost_method)
+                    elif cost_method == 'pearson correlation':
+                        cost_matrix = otu.correlation_cost(source_data_filtre, noisy_matrix)
                     print("Cost matrix :", cost_matrix.shape)
                     print(f"Mean = {np.mean(cost_matrix)}")
                     print(f"Min = {np.min(cost_matrix)}")
@@ -557,7 +559,7 @@ results, df_truth, df_target = process_simulation(
         model=model,
         node2id=node2id_w,
         deprecated=deprecated,
-        cost_method='jaccard',  # 'wasserstein' ou 'hamming pondéré' ou 'hamming pondéré normes'
+        cost_method='pearson correlation',  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
         weights_cost=ic,
         transp_method_list=['classic', 'unbalanced']  # 'classic' ou 'frlc' ou 'unbalanced'
         )

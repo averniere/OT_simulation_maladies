@@ -39,6 +39,8 @@ Le fichier `evaluation.py` du dossier `Embeddings` permet de construire le modè
 Dans le dossier `Embeddings`:
 - `information_content.py` : 
     - *compute_information_content* : calculer l'IC des termes HPO à partir d'une base de données de maladies.
+- `data_utils.py` :
+    - *f_ground_truth* : retourne les couples (i, j) d'indices de maladies OMIM-Orphanet correspondantes.
 - `OT_utils.py` : 
     - *basic_cost_matrix* : calculer la matrice de coût associée aux dissimilarités de Jaccard, Hamming ou à la distance euclidienne.
     - *compute_cost_matrix* : calculer la matrice de coût entre barycentres dans le disque de Poincaré.
