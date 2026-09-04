@@ -1,8 +1,7 @@
 import pandas as pd
 import numpy as np
 
-quantile_list = list(np.arange(0.95, 0.999, 0.003))
-
+quantile_list = list(np.arange(0.75, 0.999, 0.003))
 simu = pd.read_csv('simuls/simu_brut.csv.gz', sep = ';')
 
 def add_recall_precision(df, quantiles):

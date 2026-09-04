@@ -3,8 +3,16 @@ import networkx as nx
 import requests, xml.etree.ElementTree as ET
 import urllib.request
 import re
+import gc
 
-from data_utils import build_disease_correspondence
+from scipy.sparse import csr_matrix
+
+import psutil, os
+def mem():
+    return psutil.Process(os.getpid()).memory_info().rss / 1e9
+
+print(f"[début script] RAM: {mem():.2f} GB")
+
 hp_ids = []
 parents_list = []
 
@@ -39,19 +47,19 @@ node2id_w = {n: i for i, n in enumerate(objects_w)}
 root = "HP:0000001"
 depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
 
+print(f"[après graphe HPO] RAM: {mem():.2f} GB")
 
-def read_hpoa(path):
+def read_hpoa(path, usecols=None, dtype=None):
     with open(path, 'r') as f:
         skip = sum(1 for line in f if line.startswith('#'))
-    return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
+    return pd.read_csv(
+        path, sep='\t', skiprows=skip, low_memory=False, usecols=usecols
+    )
 
-
-df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa')
+cols_needed = ['database_id', 'hpo_id', 'disease_name', 'frequency']
+df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa', usecols=cols_needed)
 df_hpoa['disease_name'] = df_hpoa['disease_name'].str.lower().str.strip().str.replace(r'[\s\-]+', ' ', regex=True)
-df_hpoa.tail()
 
-correspondence_exacte = build_disease_correspondence(df_hpoa)
-print(f"Correspondances trouvées : {len(correspondence_exacte)}")
 
 # Construction de deux dataframes à partir de df_hpoa
 df_pivot = df_hpoa[['database_id', 'hpo_id']].drop_duplicates()
@@ -60,13 +68,15 @@ df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', c
 df_pivot.columns.name = None
 df_pivot = df_pivot.reset_index()
 
-df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
-df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
+print(f"[après lecture hpoa] RAM: {mem():.2f} GB")
 
-df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
-df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
+#df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
+#df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
 
-hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+#df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
+#df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
+
+#hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
 
 profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
@@ -76,16 +86,30 @@ hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
 genes_to_disease = pd.read_csv("../data/genes_to_disease.txt", sep="\t")
 genes_to_disease = genes_to_disease.drop(columns='source')
 
-ppi = pd.read_csv("https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", sep="," )
+ppi = pd.read_csv(
+    "https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", 
+    sep=",",
+    dtype={"protein1": "str", "protein2": "str", "combined_score": "int16"}
+    )
 
-doc = pd.read_csv("https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz", sep="\t")
+print(f"[après lecture ppi] RAM: {mem():.2f} GB")
+
+doc = pd.read_csv(
+    "https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz", 
+    sep="\t",
+    usecols=["#string_protein_id", "preferred_name", "annotation"])
 doc = doc.rename(columns={"preferred_name":"gene_symbol"})
-doc = doc.drop(columns="protein_size")
 
 df0 = pd.merge(genes_to_disease, doc, how='left', on='gene_symbol')
 df1 = pd.merge(df0, ppi, how='left', left_on="#string_protein_id", right_on="protein1")
 df1 = df1.drop(columns="protein1")
+print(df1.dtypes)
+print()
 
+print(f"[après merge df1] RAM: {mem():.2f} GB")
+
+print("1")
+print(f"[checkpoint 1] RAM: {mem():.2f} GB")
 
 # ======================================================================================
 # ================== Correspondances issues d'Orphadata ================================
@@ -114,9 +138,26 @@ list_orpha = df_orpha_omim['orpha_id'].unique()
 
 work_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
 work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
+print(f"work_omim shape: {work_omim.shape}, memory (MB): {work_omim.memory_usage(deep=True).sum()/1e6:.1f}")
+print(f"df1 shape: {df1.shape}, memory (MB): {df1.memory_usage(deep=True).sum()/1e6:.1f}")
 
-df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
-df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
+df1_agg = df1.groupby('disease_id', as_index=False, dropna=True).agg(
+    ncbi_gene_id=("ncbi_gene_id", "first"),
+    gene_symbol=('gene_symbol', lambda x: list(set(x.dropna()))),
+    association_type=("association_type", "first"),
+    protein=('#string_protein_id', lambda x: list(set(x.dropna()))),
+    annotation=("annotation", "first"),
+    protein2=("protein2", lambda x: list(set(x.dropna()))),
+    combined_score=("combined_score", lambda x: list(set(x.dropna()))),
+    n_proteins=('#string_protein_id', lambda x: len(set(x.dropna()))),
+)
+
+df1_omim = pd.merge(work_omim, df1_agg, how='left', left_on='database_id', right_on='disease_id')
+#df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
+print(f"df1_omim shape: {df1_omim.shape}, memory (MB): {df1_omim.memory_usage(deep=True).sum()/1e6:.1f}")
+df1_orpha = pd.merge(work_orpha, df1_agg, how='left', left_on='database_id', right_on='disease_id')
+#df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
+print(f"df1_orpha shape: {df1_orpha.shape}, memory (MB): {df1_orpha.memory_usage(deep=True).sum()/1e6:.1f}")
 
 #df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
     #ncbi_gene_id=("ncbi_gene_id", "first"),
@@ -143,8 +184,11 @@ df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_o
 #df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
     #lambda x: len(set(x)) if isinstance(x, list) else 1
 #)
+print("2")
+print(f"[checkpoint 2] RAM: {mem():.2f} GB")
 
-
+del df_pivot
+gc.collect()
 # ======================================================================================
 # ================== Maladies Orphanet depuis Orphadata ================================
 # ======================================================================================
@@ -209,22 +253,46 @@ deprecated={
 }
 
 orphadata = pd.DataFrame(rows)
+orphadata['HPO_id'] = orphadata['HPO_id'].str.strip()
 orphadata['HPO_id'] = orphadata['HPO_id'].replace(deprecated)
+orphadata = orphadata.dropna(subset=['HPO_id'])
 
 pivot = orphadata[['disease_id', 'HPO_id']].drop_duplicates()
 pivot['values'] = 1.
+
+
+def pivot_sparse(df, index_col, columns_col, value_col):
+    row_cat = df[index_col].astype('category')
+    col_cat = df[columns_col].astype('category')
+    sp = csr_matrix(
+        (df[value_col].values, (row_cat.cat.codes, col_cat.cat.codes)),
+        shape=(len(row_cat.cat.categories), len(col_cat.cat.categories))
+    )
+    out = pd.DataFrame.sparse.from_spmatrix(
+        sp, index=row_cat.cat.categories, columns=col_cat.cat.categories
+    )
+    out.index.name = index_col
+    return out.reset_index()
+
 pivot = pd.pivot_table(data=pivot, values='values', index='disease_id', columns='HPO_id', aggfunc='max', fill_value=0)
+#pivot = pivot_sparse(pivot, 'disease_id', 'HPO_id', 'values')
 pivot.columns.name = None
 pivot = pivot.reset_index()
 
 all_columns = work_omim.columns.union(pivot.columns)
 
-pivot_aligned = pivot.reindex(columns=all_columns, fill_value=0).drop(columns=['database_id'])
+pivot_aligned = pivot.reindex(columns=all_columns, fill_value=0)
+pivot_aligned = pivot_aligned.drop(columns=['database_id'])
 work_omim2 = work_omim.reindex(columns=all_columns, fill_value=0).drop(columns=['disease_id'])
 
 work_orpha2 = pivot_aligned[pivot_aligned['disease_id'].isin(list_orpha)]
 work_orpha2 = work_orpha2.rename(columns={'disease_id':'database_id'})
 
+print("3")
+print(f"[checkpoint 3] RAM: {mem():.2f} GB")
+
+del pivot, pivot_aligned
+gc.collect()
 
 # ======================================================================================
 # ================== Bases avec les fréquences =========================================
@@ -245,14 +313,27 @@ def convert_frequency(
         return float(freq[:-1]) / 100
 
 df_hpoa["value"] = df_hpoa.apply(lambda row: convert_frequency(row.get('frequency')), axis=1)
+relevant_ids = set(list_omim) | set(list_orpha)
+df_hpoa_filtered = df_hpoa[df_hpoa['database_id'].isin(relevant_ids)]
 
-matrix = df_hpoa.pivot_table(
-    index="database_id",
-    columns="hpo_id",
-    values="value",
-    aggfunc="first",
-    fill_value=0
-)
+print(f"RAM avant matrix: {mem():.2f} GB")
+print("df_hpoa shape:", df_hpoa.shape)
+n_dis = df_hpoa['database_id'].nunique()
+n_hpo = df_hpoa['hpo_id'].nunique()
+print(f"database_id uniques: {n_dis}, hpo_id uniques: {n_hpo}")
+print(f"Taille dense théorique de matrix (GB): {n_dis * n_hpo * 8 / 1e9:.2f}")
+
+#matrix = df_hpoa.pivot_table(
+    #index="database_id",
+    #columns="hpo_id",
+    #values="value",
+    #aggfunc="first",
+    #fill_value=0
+#)
+
+matrix = pivot_sparse(df_hpoa_filtered, "database_id", "hpo_id", "value")
+print("4")
+
 matrix.columns.name = None
 matrix = matrix.reset_index()
 
@@ -274,6 +355,7 @@ matrix_orpha = orphadata.pivot_table(
     aggfunc="first",
     fill_value=0
 )
+#matrix_orpha = pivot_sparse(orphadata, "disease_id", "HPO_id", "value")
 matrix_orpha.columns.name = None
 matrix_orpha = matrix_orpha.reset_index()
 
@@ -282,3 +364,6 @@ work_omimF2 = work_omimF.reindex(columns=all_columns, fill_value=0).drop(columns
 
 work_orphaF2 = matrix_orpha[matrix_orpha['disease_id'].isin(list_orpha)]
 work_orphaF2 = work_orphaF2.rename(columns={'disease_id':'database_id'})
+print(f"RAM finale: {mem():.2f} GB")
+del matrix, matrix_orpha
+gc.collect()

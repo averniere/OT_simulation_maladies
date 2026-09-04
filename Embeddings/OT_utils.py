@@ -105,8 +105,8 @@ def compute_all_distances(emb_i, all_emb_j):
 
 
 def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
-    n=len(df_omim)
-    m=len(df_orpha)
+    n = len(df_omim)
+    m = len(df_orpha)
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     model.eval()
     # W = model.weight.detach().cpu().numpy()
@@ -318,6 +318,34 @@ def compute_transport_sinkhorn(
     return optimal_plan_sinkhorn, optimal_cost_sinkhorn
 
 
+def compute_unbalanced(C: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    epsilon: float,
+    regm,
+    max_iters: int = 100000,
+    tau: float = 1e-4,
+    verbose: bool = False,
+    log: bool = False):
+    n = C.shape[0]
+    m = C.shape[1]
+    if a is None:
+        a = np.ones(n)/n
+    if b is None:
+        b = np.ones(m)/m
+    assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
+    assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
+    optimal_plan_sinkhorn = ot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, epsilon, regm, numItermax=max_iters, stopThr=tau)
+    optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
+
+    if verbose:
+        print(f"entropic optimal transport plan: \n{optimal_plan_sinkhorn}")
+        print(f"entropic transport cost: {optimal_cost_sinkhorn}")
+
+    return optimal_plan_sinkhorn, optimal_cost_sinkhorn
+
+
+
 def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
     """
     Évalue le plan de transport P contre la vérité terrain.
@@ -423,6 +451,23 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
 
     return ranks_orpha, ranks_omim, pairs1, pairs2
 
+
+def evaluate_transport_proba(P, gt_set, seuil):
+    '''
+    Inspiré de https://arxiv.org/pdf/2505.24759.
+    Calcule la probabilité d'association pour chaque paire de maladies (P_ij/Pj+Pij/Pi)/2.
+    Seuille la matrice de probabilités ainsi obtenue. 
+    Renvoie une mesure de précision (% de paires retrouvées parmi les positifs) et de rappel
+    (% de paires retrouvées parmi la vérité de terrain)
+    '''
+    marginal_a = np.sum(P, axis=1)
+    marginal_b = np.sum(P, axis=0)
+    S = (np.divide(P, marginal_a)+np.divide(P, marginal_b))/2
+    S = (S>seuil).astype(int)
+    tp=0
+    for (i,j) in gt_set:
+        tp+=S[i,j]
+    return tp/sum(S), tp/len(gt_set)
 
 def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
     ax[0].loglog(reg_strengths, plan_diff, lw=4)

@@ -1,9 +1,15 @@
 #Import
 import torch
+import re
 import pandas as pd
 import numpy as np
 import OT_utils as otu
+import networkx as nx
+#import data 
 
+from poincare import PoincareManifold
+from model import Distance_PE
+from information_content import deprecated, compute_information_content
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
@@ -301,7 +307,7 @@ def dissimilarity_matrix(similarity):
     return symmetric_matrix
 
 # Filtrer maladies
-def filtrer_maladies(df, matrice, colonne_maladies, all_disease = False):
+def filtrer_maladies(df, matrice, colonne_maladies, all_disease = True):
     # Pour ne garder que les mendéliennes réellement utilisées dans la simulation.
     if all_disease:
         return (matrice)
@@ -357,7 +363,7 @@ def process_simulation(
     deprecated,
     cost_method=None,
     weights_cost=None,
-    transp_method=None,
+    transp_method_list=None,
     ):
 
     #global_result = pd.DataFrame()
@@ -402,6 +408,8 @@ def process_simulation(
                     # Calcul des distances
                     print("Source data filtré")
                     print(source_data_filtre.shape)
+                    print(source_data_filtre.head())
+                    print(noisy_matrix.head())
                     print(noisy_matrix.shape)
                     if cost_method == 'wasserstein':
                         cost_matrix = otu.compute_costs_matrix_wasserstein2(source_data_filtre, noisy_matrix, node2id, model, deprecated)
@@ -432,24 +440,27 @@ def process_simulation(
                     print("Compute transport...")
                     epsilon0 = epsilon*np.mean(cost_matrix)
                     print("Regularization, epsilon : ", epsilon0)
-                    if transp_method == 'classic':
-                        ot_plan, _ = otu.compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
-                    elif transp_method == 'frlc':
-                        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                        cost_matrix_torch = torch.tensor(cost_matrix, dtype=torch.float64).to(device)
-                        gamma = 70
-                        print(f'Gamma: {gamma}')
-                        ot_plan_torch, err = FRLC_opt(cost_matrix_torch, None, None, None, None, 50, 50, gamma)
-                        ot_plan = ot_plan_torch.detach().cpu().numpy()
-                    #elif transp_method == 'unbalanced':
-                    print("Finished !")
-                    transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
-                    OT_type = f"OT-{cost_method}"
-                    ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
-                    ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
-                    ot_results["eta"] = 0.0
-                    #global_result = pd.concat([global_result, ot_results], ignore_index=True)
-                    all_results.append(ot_results)
+                    for transp_method in transp_method_list :
+                        if transp_method == 'classic':
+                            ot_plan, _ = otu.compute_transport_sinkhorn(cost_matrix, None, None, epsilon0, 10000, 1e-4, False)
+                        elif transp_method == 'frlc':
+                            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                            cost_matrix_torch = torch.tensor(cost_matrix, dtype=torch.float64).to(device)
+                            gamma = 70
+                            print(f'Gamma: {gamma}')
+                            ot_plan_torch, err = FRLC_opt(cost_matrix_torch, None, None, None, None, 50, 50, gamma)
+                            ot_plan = ot_plan_torch.detach().cpu().numpy()
+                        elif transp_method == 'unbalanced':
+                            regm = (float(np.inf), 0.75)
+                            ot_plan, _ = otu.compute_unbalanced(cost_matrix, None, None, epsilon0, regm)
+                        print("Finished !")
+                        transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
+                        OT_type = f"OT-{cost_method}-{transp_method}"
+                        ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                        ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
+                        ot_results["eta"] = 0.0
+                        #global_result = pd.concat([global_result, ot_results], ignore_index=True)
+                        all_results.append(ot_results)
 
                     # OT Laplacien
                     Xs_real = source_data_filtre.to_numpy()
@@ -460,7 +471,7 @@ def process_simulation(
 
                             gamma_opt = Ot_Laplacienne(a, b, xs=Xs_real, xt=Xt_simu, M=cost_matrix, S=S_value, epsilon=epsilon0, eta=eta)
                             gamma_opt_df = pd.DataFrame(gamma_opt, index=source_data_filtre.index, columns=target_data.index)
-                            OT_type = f"OT regularized, {S_name}"
+                            OT_type = f"OT regularized, {S_name}, {eta}"
                             laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
                             laplace_results["eta"] = eta
                             laplace_results["mean_rank_error"] = evaluate_rank(gamma_opt_df, df_truth)
@@ -479,3 +490,79 @@ def process_simulation(
     return global_result, df_truth, target_data
 
 
+hp_ids = []
+parents_list = []
+
+with open("../data/HPOs.csv", "r") as f:
+    next(f)
+    for line in f:
+        hp_id = line.split(';')[0]
+        
+        # Extraire uniquement la liste contenant des IDs HP:XXXXXXX
+        match = re.search(r"\[([^\]]*'HP:\d{7}'[^\]]*)\]", line)
+        if match:
+            parents = re.findall(r"HP:\d{7}", match.group(0))
+        else:
+            parents = []
+        
+        hp_ids.append(hp_id)
+        parents_list.append(parents)
+
+df_hpo = pd.DataFrame({'hp_id': hp_ids, 'parents': parents_list})
+
+G_hpo_work = nx.DiGraph()
+for hp_id in hp_ids:
+    G_hpo_work.add_node(hp_id)
+for hp_id, parents in zip(hp_ids, parents_list):
+    for parent_id in parents:
+        if parent_id in G_hpo_work:
+            G_hpo_work.add_edge(hp_id, parent_id)
+
+G_hpo_work.add_edge('HP:0430046', 'HP:0001382')  # Missing edge
+objects_w = list(G_hpo_work.nodes())
+node2id_w = {n: i for i, n in enumerate(objects_w)}
+root = "HP:0000001"
+depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
+
+checkpoint = torch.load('logs/2026_5_7/12/model_final.pt', map_location='cpu', weights_only=False)
+objects = checkpoint['objects']
+hp = checkpoint['hyperparams']
+
+manifold = PoincareManifold()
+model = Distance_PE(
+    n=len(objects), dim=hp['dim'],
+    manifold=manifold, sparse=False, 
+    learn_curvature=False, init_curvature=1., 
+    weight_decay=0
+    )
+model.load_state_dict(checkpoint['model_state_dict'])
+model.eval()
+
+profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
+profils_omim = profils_omim.reset_index()
+hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
+weights, diseases, all_diseases = compute_information_content(profils_omim, G_hpo_work)
+ic = {t: -np.log(weights[t]) if weights.get(t, 0) > 0 else 0.0 for t in weights}
+
+results, df_truth, df_target = process_simulation(
+        source_data=profils_omim[hpo_cols0],
+        n_complex_list=[30],  # Nombre de maladies complexes à simuler           
+        n_match_list=[50, 100, 150],  # [10 , 50], Nombre de maladies mendéliennes par maladie complexe              
+        noise_levels=[0, 0.2, 0.5],  # [0, 0.05, 0.1, 0.2],   
+        quantiles=list(np.arange(0.75, 0.999, 0.003)),
+        epsilon=0.1,
+        overlap_test=[0, 0.2, 0.5],    
+        group_size=6,                     
+        eta_list=[1e4],
+        model=model,
+        node2id=node2id_w,
+        deprecated=deprecated,
+        cost_method='jaccard',  # 'wasserstein' ou 'hamming pondéré' ou 'hamming pondéré normes'
+        weights_cost=ic,
+        transp_method_list=['classic', 'unbalanced']  # 'classic' ou 'frlc' ou 'unbalanced'
+        )
+
+results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
+df_target.to_csv("simuls/target.csv", sep=';', index=False)
+df_truth.to_csv("simuls/truth.csv", sep=';', index=False)
+    
