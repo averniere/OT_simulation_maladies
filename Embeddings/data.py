@@ -11,7 +11,6 @@ import psutil, os
 def mem():
     return psutil.Process(os.getpid()).memory_info().rss / 1e9
 
-print(f"[début script] RAM: {mem():.2f} GB")
 
 hp_ids = []
 parents_list = []
@@ -47,7 +46,6 @@ node2id_w = {n: i for i, n in enumerate(objects_w)}
 root = "HP:0000001"
 depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
 
-print(f"[après graphe HPO] RAM: {mem():.2f} GB")
 
 def read_hpoa(path, usecols=None, dtype=None):
     with open(path, 'r') as f:
@@ -68,7 +66,6 @@ df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', c
 df_pivot.columns.name = None
 df_pivot = df_pivot.reset_index()
 
-print(f"[après lecture hpoa] RAM: {mem():.2f} GB")
 
 #df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
 #df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
@@ -92,7 +89,6 @@ ppi = pd.read_csv(
     dtype={"protein1": "str", "protein2": "str", "combined_score": "int16"}
     )
 
-print(f"[après lecture ppi] RAM: {mem():.2f} GB")
 
 doc = pd.read_csv(
     "https://stringdb-downloads.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz", 
@@ -105,11 +101,6 @@ df1 = pd.merge(df0, ppi, how='left', left_on="#string_protein_id", right_on="pro
 df1 = df1.drop(columns="protein1")
 print(df1.dtypes)
 print()
-
-print(f"[après merge df1] RAM: {mem():.2f} GB")
-
-print("1")
-print(f"[checkpoint 1] RAM: {mem():.2f} GB")
 
 # ======================================================================================
 # ================== Correspondances issues d'Orphadata ================================
@@ -138,8 +129,6 @@ list_orpha = df_orpha_omim['orpha_id'].unique()
 
 work_omim = df_pivot[df_pivot['database_id'].isin(list_omim)]
 work_orpha = df_pivot[df_pivot['database_id'].isin(list_orpha)]
-print(f"work_omim shape: {work_omim.shape}, memory (MB): {work_omim.memory_usage(deep=True).sum()/1e6:.1f}")
-print(f"df1 shape: {df1.shape}, memory (MB): {df1.memory_usage(deep=True).sum()/1e6:.1f}")
 
 df1_agg = df1.groupby('disease_id', as_index=False, dropna=True).agg(
     ncbi_gene_id=("ncbi_gene_id", "first"),
@@ -184,8 +173,6 @@ print(f"df1_orpha shape: {df1_orpha.shape}, memory (MB): {df1_orpha.memory_usage
 #df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
     #lambda x: len(set(x)) if isinstance(x, list) else 1
 #)
-print("2")
-print(f"[checkpoint 2] RAM: {mem():.2f} GB")
 
 del df_pivot
 gc.collect()
@@ -288,9 +275,6 @@ work_omim2 = work_omim.reindex(columns=all_columns, fill_value=0).drop(columns=[
 work_orpha2 = pivot_aligned[pivot_aligned['disease_id'].isin(list_orpha)]
 work_orpha2 = work_orpha2.rename(columns={'disease_id':'database_id'})
 
-print("3")
-print(f"[checkpoint 3] RAM: {mem():.2f} GB")
-
 del pivot, pivot_aligned
 gc.collect()
 
@@ -332,7 +316,6 @@ print(f"Taille dense théorique de matrix (GB): {n_dis * n_hpo * 8 / 1e9:.2f}")
 #)
 
 matrix = pivot_sparse(df_hpoa_filtered, "database_id", "hpo_id", "value")
-print("4")
 
 matrix.columns.name = None
 matrix = matrix.reset_index()
@@ -364,6 +347,6 @@ work_omimF2 = work_omimF.reindex(columns=all_columns, fill_value=0).drop(columns
 
 work_orphaF2 = matrix_orpha[matrix_orpha['disease_id'].isin(list_orpha)]
 work_orphaF2 = work_orphaF2.rename(columns={'disease_id':'database_id'})
-print(f"RAM finale: {mem():.2f} GB")
+
 del matrix, matrix_orpha
 gc.collect()
