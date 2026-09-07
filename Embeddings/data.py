@@ -300,22 +300,18 @@ df_hpoa["value"] = df_hpoa.apply(lambda row: convert_frequency(row.get('frequenc
 relevant_ids = set(list_omim) | set(list_orpha)
 df_hpoa_filtered = df_hpoa[df_hpoa['database_id'].isin(relevant_ids)]
 
-print(f"RAM avant matrix: {mem():.2f} GB")
-print("df_hpoa shape:", df_hpoa.shape)
 n_dis = df_hpoa['database_id'].nunique()
 n_hpo = df_hpoa['hpo_id'].nunique()
-print(f"database_id uniques: {n_dis}, hpo_id uniques: {n_hpo}")
-print(f"Taille dense théorique de matrix (GB): {n_dis * n_hpo * 8 / 1e9:.2f}")
 
-#matrix = df_hpoa.pivot_table(
-    #index="database_id",
-    #columns="hpo_id",
-    #values="value",
-    #aggfunc="first",
-    #fill_value=0
-#)
+matrix = df_hpoa.pivot_table(
+    index="database_id",
+    columns="hpo_id",
+    values="value",
+    aggfunc="first",
+    fill_value=0
+)
 
-matrix = pivot_sparse(df_hpoa_filtered, "database_id", "hpo_id", "value")
+#matrix = pivot_sparse(df_hpoa_filtered, "database_id", "hpo_id", "value")
 
 matrix.columns.name = None
 matrix = matrix.reset_index()
