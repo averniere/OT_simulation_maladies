@@ -339,11 +339,20 @@ def compute_unbalanced(C: np.ndarray,
     a: np.ndarray,
     b: np.ndarray,
     epsilon: float,
-    regm,
+    rega,
+    regb,
     max_iters: int = 100000,
     tau: float = 1e-4,
     verbose: bool = False,
     log: bool = False):
+    '''
+    Résout le problème de transport avec des contraintes relâchées.
+    Entrées : 
+        - a, b : contraintes de capacités,
+        - epsilon : régularisation entropique, 
+        - rega, regb : définies dans [0,1]. Si égales à 1, alors équivalent au problème de transport
+        classique. Si égales à 0, alors équivalent à un problème sans contraintes de capacités.
+    '''
     n = C.shape[0]
     m = C.shape[1]
     if a is None:
@@ -352,6 +361,7 @@ def compute_unbalanced(C: np.ndarray,
         b = np.ones(m)/m
     assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
     assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
+    regm = (rega*epsilon/(1-rega) if rega<1 else np.inf, regb*epsilon/(1-regb) if regb<1 else np.inf)
     optimal_plan_sinkhorn = ot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, epsilon, regm, numItermax=max_iters, stopThr=tau)
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
@@ -363,7 +373,7 @@ def compute_unbalanced(C: np.ndarray,
 
 
 
-def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
+def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
     """
     Évalue le plan de transport P contre la vérité terrain.
     Inputs : 
@@ -428,19 +438,24 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
                         if C is not None and (i, j_true) not in pairs2.keys():
                             pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
         n = len(gt_set)
-        print(f"Paires évaluées : {n}")
-        for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:  # Idéalement, créer un dico méthode --> résultat
-            print(f"=========== {val} ===========")
-            for k in top_k:
-                if val == "Lignes":
-                    print(f"Top-{k} accuracy : {results1[k]/n:.3f} ({results1[k]}/{n})")
-                elif val == "Colonnes":
-                    print(f"Top-{k} accuracy : {results2[k]/n:.3f} ({results2[k]}/{n})")
-                else:
-                    print(f"Top-{k} accuracy : {both[k]/n:.3f} ({both[k]}/{n})")
-        print(f" Rang moyen des maladies Orpha : {np.mean(ranks_orpha):.2f}")
-        print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
+        if verbose:
+            print(f"Paires évaluées : {n}")
+            for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:  # Idéalement, créer un dico méthode --> résultat
+                print(f"=========== {val} ===========")
+                for k in top_k:
+                    if val == "Lignes":
+                        print(f"Top-{k} accuracy : {results1[k]/n:.3f} ({results1[k]}/{n})")
+                    elif val == "Colonnes":
+                        print(f"Top-{k} accuracy : {results2[k]/n:.3f} ({results2[k]}/{n})")
+                    else:
+                        print(f"Top-{k} accuracy : {both[k]/n:.3f} ({both[k]}/{n})")
+            print(f" Rang moyen des maladies Orpha : {np.mean(ranks_orpha):.2f}")
+            print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
     else:
+        ranks = []
+        pairs = {}
+        results = {k: 0 for k in top_k}
+        marginal = np.sum(P, axis=1)
         for i in gt_set.keys():
             ranked_cols = np.argsort(P[i])[::-1]
             js = gt_set[i]
@@ -461,12 +476,13 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5)):
             ranks.append(rank_j) # Rang de la vraie maladie j_true dans la matrice de transport
               
         n = len(gt_set)
-        print(f"Paires évaluées : {n}")
-        for k in top_k:
-            print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
-        #print(f" Rang moyen: {np.mean(ranks):.2f}")
+        if verbose:
+            print(f"Paires évaluées : {n}")
+            for k in top_k:
+                print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
+            #print(f" Rang moyen: {np.mean(ranks):.2f}")
 
-    return ranks_orpha, ranks_omim, pairs1, pairs2
+    return ranks_orpha, ranks_omim, pairs1, pairs2, both
 
 
 def evaluate_transport_proba(P, gt_set, seuil):
