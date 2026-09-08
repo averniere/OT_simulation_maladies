@@ -149,21 +149,18 @@ def build_disease_correspondence(df):
     })[['disease_name', 'omim_id', 'orpha_id']]
 
 
-def find_gene_correspondence(df, disease_col, gene_col):
-    gene_sets = df.groupby(disease_col)[gene_col].apply(set)
-    omim_sets = gene_sets[gene_sets.index.str.startswith("OMIM")]
-    orpha_sets = gene_sets[gene_sets.index.str.startswith("ORPHA")]
-    matches = []
-    for omim_id, omim_genes in omim_sets.items():
-        for orpha_id, orpha_genes in orpha_sets.items():
-            if omim_genes == orpha_genes:
-                matches.append({"omim_id": omim_id, "orpha_id": orpha_id, "genes": ", ".join(omim_genes)})
-    
-    return pd.DataFrame(matches)
-
-
 def compute_disease_barycenters(profils_omim, node2id, model, deprecated, weights=None, normalize=False, c=1):
-    
+    '''
+    Entrées : 
+        - profils_omim : dataset d'annotations de maladies.
+        - node2id : dictionnaire noeud-index dans le graphe.
+        - model : modèle à partir duquel charger les représentations des noeuds.
+        - weights : pondérations éventuelles.
+        - normalize : True si l'on normalise les poids.
+    Sortie :
+        - profils_omim : dataset d'annotations de maladie avec une colonne 'barycenter', donnant les
+        coordonnées de la maladie dans le disque de Poincaré.
+    '''
     model.eval()
     W = model.weight.detach().cpu()
     hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]

@@ -28,7 +28,7 @@ for i in range(n_replicats):
     subprocess.run([python_path, "simulations.py"], check=True)
     
     # Appliquer add_metrics
-    subprocess.run([python_path, "add_metrics.py"], check=True)
+    subprocess.run([python_path, "simulations_add_metrics.py"], check=True)
     
     # Renommer et stocker le fichier resultats.csv
     result_file = os.path.join(result_dir, f"results_{i+1}.csv")

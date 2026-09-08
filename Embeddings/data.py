@@ -66,15 +66,6 @@ df_pivot = pd.pivot_table(data=df_pivot, values='values', index='database_id', c
 df_pivot.columns.name = None
 df_pivot = df_pivot.reset_index()
 
-
-#df_orpha = df_pivot[df_pivot['database_id'].str.startswith('ORPHA:')]
-#df_orpha = df_orpha[df_orpha['database_id'].isin(correspondence_exacte['orpha_id'])]
-
-#df_omim = df_pivot[df_pivot['database_id'].str.startswith('OMIM:')]
-#df_omim = df_omim[df_omim['database_id'].isin(correspondence_exacte['omim_id'])]
-
-#hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
-
 profils_omim = pd.read_csv("../data/profils_omim.csv.gz", index_col=0)
 profils_omim = profils_omim.reset_index()
 hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
@@ -143,36 +134,9 @@ df1_agg = df1.groupby('disease_id', as_index=False, dropna=True).agg(
 
 df1_omim = pd.merge(work_omim, df1_agg, how='left', left_on='database_id', right_on='disease_id')
 #df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
-print(f"df1_omim shape: {df1_omim.shape}, memory (MB): {df1_omim.memory_usage(deep=True).sum()/1e6:.1f}")
+
 df1_orpha = pd.merge(work_orpha, df1_agg, how='left', left_on='database_id', right_on='disease_id')
 #df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
-print(f"df1_orpha shape: {df1_orpha.shape}, memory (MB): {df1_orpha.memory_usage(deep=True).sum()/1e6:.1f}")
-
-#df1_omim = df1_omim.groupby("disease_id", as_index=False, dropna=True).agg(
-    #ncbi_gene_id=("ncbi_gene_id", "first"),
-    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    #association_type=("association_type", "first"),
-    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    #annotation=("annotation", "first"),
-    #protein2=("protein2", list),
-    #combined_score=("combined_score", list)
-#)
-#df1_omim['n_proteins'] = df1_omim['protein'].apply(
-    #lambda x: len(set(x)) if isinstance(x, list) else 1
-#)
-
-#df1_orpha = df1_orpha.groupby("disease_id", as_index=False, dropna=True).agg(
-    #ncbi_gene_id=("ncbi_gene_id", "first"),
-    #gene_symbol=("gene_symbol", lambda x: list(set(x.dropna()))),
-    #association_type=("association_type", "first"),
-    #protein=("#string_protein_id", lambda x: list(set(x.dropna()))),
-    #annotation=("annotation", "first"),
-    #protein2=("protein2", list),
-    #combined_score=("combined_score", list)
-#)
-#df1_orpha['n_proteins'] = df1_orpha['protein'].apply(
-    #lambda x: len(set(x)) if isinstance(x, list) else 1
-#)
 
 del df_pivot
 gc.collect()

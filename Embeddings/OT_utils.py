@@ -3,6 +3,10 @@ import ot
 import numpy as np
 import pandas as pd
 from scipy.sparse import csgraph
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from scipy import sparse
 from ot import sinkhorn
 from ot.optim import gcg
 from tqdm import tqdm
@@ -240,12 +244,23 @@ def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
     A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
     B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
     
-    A = (A > 0).astype(int)  # Transformation en des datasets binaires dans le cas où on a des fréquences
-    B = (B > 0).astype(int)  # Transformation en des datasets binaires dans le cas où on a des fréquences
+    A = (A > 0).astype(np.float32)  # Transformation en des datasets binaires dans le cas où on a des fréquences
+    B = (B > 0).astype(np.float32)  # Transformation en des datasets binaires dans le cas où on a des fréquences
+    
+    A_sp  = sparse.csr_matrix(A)
+    Bw_sp = sparse.csr_matrix(B * w)
 
-    Aw = A * w
-    Bw = B * w
-    C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
+    inter = A_sp.dot(Bw_sp.T)
+    inter = inter.toarray()
+
+    Aw_sum = A_sp.multiply(w).sum(axis=1).A1 
+    Bw_sum = Bw_sp.sum(axis=1).A1
+
+    C = Aw_sum[:, None] + Bw_sum[None, :] - 2 * inter
+    #Aw = A * w
+    #Bw = B * w
+    #inter = A @ Bw.T
+    #C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (inter)
     return C
 
 
@@ -591,3 +606,56 @@ def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=500, stopThr=1e-
 
     # Résolution du problème d'optimisation avec l'algorithme du gcg
     return gcg(a, b, M, reg1=epsilon, reg2=eta, f=f, df=df, G0=None, numItermax=numItermax, numItermaxEmd=numInnerItermax, stopThr=stopThr, stopThr2=stopInnerThr,verbose=verbose)
+
+
+def plot_unbalanced(taus, C, epsilon, gt_set):
+    '''
+    Entrées :
+        - taus : liste de valeurs de tau à tester (tau dans [0,1]).
+        - C : matrice de coût précalculée.
+        - epsilon : paramètre de régularisation entropique.
+        - gt_set : vérité de terrain.
+    Sortie : 
+        - Evolution des métriques Top 1 et Top 3, calculées pour lignes et colonnes à la fois,
+        en fonction de tau, pour chaque scénario considéré (unbalanced, semi-balanced).
+    '''
+    scenarios = {
+        'unbalanced' : lambda tau: (tau, tau), 
+        'semi-a': lambda tau: (tau, 1.), 
+        'semi-b': lambda tau: (1., tau)
+        }
+    res = {}
+    for sname, sfun in tqdm(scenarios.items()):
+        res[sname]={'Top 1':[], 'Top 3':[]}
+        for reg in taus:
+            rega, regb = sfun(reg)
+            ot_plan_reg, _ = compute_unbalanced(C, None, None, epsilon, rega, regb, 10000, 1e-4, False)
+            _, _, _, _, both = evaluate_transport(ot_plan_reg, gt_set, C, verbose=False)
+            res[sname]['Top 1'].append(both[1]/len(gt_set))
+            res[sname]['Top 3'].append(both[3]/len(gt_set))
+
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(5, 5))
+    palette = sns.color_palette(n_colors=len(scenarios) * 2)
+    color_idx = 0
+    for sname in scenarios:
+        markers = ['o', 'X']
+        marker_idx = 0
+        for metric in ['Top 1', 'Top 3']:
+            sns.lineplot(
+                x=taus, 
+                y=res[sname][metric], 
+                marker=markers[marker_idx], 
+                label=f'{sname} - {metric}',
+                color=palette[color_idx],
+                ax=ax,
+            )
+            marker_idx += 1
+        color_idx += 1
+    ax.set_xlabel(r'$\tau$')
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Max Top 1 = {round(np.max([np.max(res[sname]['Top 1']) for sname in res]), 2)}, Top 3 = {round(np.max([np.max(res[sname]['Top 3']) for sname in res]), 2)}")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.show()
