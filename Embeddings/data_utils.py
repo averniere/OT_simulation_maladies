@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import tempfile, os
@@ -386,3 +387,40 @@ def load_all_methods(savedir=Path("../data/utils")):
         dict_method[f.stem] = {k: loaded[k] for k in loaded.files}
         loaded.close()
     return dict_method
+
+
+def build_pairs_dictionary(pairs, df_omim, df_orpha, df):
+    '''
+    Entrées :
+        - pairs : ensemble (set) de paires de maladies (i,j).
+        - df_omim, df_orpha : bases de données Omim et Orpha.
+        - df : base de données initiale non filtrée, d'où l'on peut tirer les noms des maladies.
+    Sortie :
+        - Dictionnaire qui indique pour chaque paire, le nom de la maladie associée, le nombre de
+        termes actifs dans chacune des deux bases et la liste de ces termes.
+    '''
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP')]
+    X_omim = df_omim[hpo_cols].astype(int).values
+    X_orpha = df_orpha[hpo_cols].astype(int).values
+
+    omim_to_idx = {v: i for i, v in enumerate(df_omim['database_id'].values)} 
+    orpha_to_idx = {v: i for i, v in enumerate(df_orpha['database_id'].values)}
+
+    idx2omim = {t: v for v, t in omim_to_idx.items()}
+    idx2orpha = {t: v for v, t in orpha_to_idx.items()}
+
+    dico = {}
+    for (i, j) in pairs:
+        active_omim = np.where(X_omim[i,:]==1)[0]
+        active_orpha = np.where(X_orpha[j, :]==1)[0]
+        omim_hpos = [hpo_cols[k] for k in active_omim]
+        orpha_hpos = [hpo_cols[k] for k in active_orpha]
+        disease_i = pd.unique(df[df['database_id']==idx2omim[i]]['disease_name'])[0]
+        disease_j = pd.unique(df[df['database_id']==idx2orpha[j]]['disease_name'])[0]
+
+        dico[(i, j)] = {
+        "omim":  {"name": disease_i, "count": len(omim_hpos), "terms": omim_hpos},
+        "orpha": {"name": disease_j, "count": len(orpha_hpos), "terms": orpha_hpos},
+        "commun":set(omim_hpos)&set(orpha_hpos),
+        }
+    return dico 

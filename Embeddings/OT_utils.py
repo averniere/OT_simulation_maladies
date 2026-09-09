@@ -449,6 +449,23 @@ def compute_unbalanced(C: np.ndarray,
 #===========================================================================================
 #============================== Evaluation des résultats ===================================
 #===========================================================================================
+def read_transport_plan(P, gt_set):
+    ranks = {}
+    for (i,j) in gt_set:
+        ranked_cols = np.argsort(P[i])[::-1]
+        ranked_lines = np.argsort(P[:,j])[::-1]
+            
+        rankj = np.where(ranked_cols == j)[0]
+        if len(rankj) == 0:
+            continue
+        rankj = rankj[0] + 1
+        
+        ranki = np.where(ranked_lines == i)[0]
+        if len(ranki) == 0:
+            continue
+        ranki = ranki[0] + 1
+        ranks[(i, j)] = [rankj, ranki]
+    return ranks
 
 
 def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
