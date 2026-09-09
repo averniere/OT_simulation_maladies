@@ -32,8 +32,9 @@ Dossier `Embeddings`:
 - `simulations_add_metrics.py`, `simulations_process.py`, `simulations.py` et le dossier `simuls` reprennent le cadre de simulation de maladies complexes à partir de maladies mendéliennes.
 
 Dossier `HGCN` :
-    - `decoder.py`, `encoder.py`, `hyp_layer.py`, `main.py`, `model.py`, `poincare.py`, `RiemAdam.py`, `RSGD.py` et `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
-    - 
+- `decoder.py`, `encoder.py`, `hyp_layer.py`, `main.py`, `model.py`, `poincare.py`, `RiemAdam.py`, `RSGD.py` et `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
+- 
+
 ## Où trouver les fonctions Python utiles
 
 Dans le dossier `Embeddings`:

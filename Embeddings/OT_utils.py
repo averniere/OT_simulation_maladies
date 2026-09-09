@@ -25,8 +25,8 @@ def compute_cost_matrix(omim, orpha):
     """ 
     Distance de Poincaré entre barycentres.
     """
-    omim_bary = torch.tensor(np.stack(omim['barycenter'].values),  dtype=torch.float64)
-    orpha_bary = torch.tensor(np.stack(orpha['barycenter'].values), dtype=torch.float64)
+    omim_bary = torch.tensor(np.stack(omim['barycenter'].values),  dtype=torch.float32)
+    orpha_bary = torch.tensor(np.stack(orpha['barycenter'].values), dtype=torch.float32)
 
     n, m = omim_bary.shape[0], orpha_bary.shape[0]
 
@@ -46,7 +46,7 @@ def emb_norms(df_omim, df_orpha, node2id_w, model, manifold=PoincareManifold()):
     W = model.weight.detach().cpu().numpy()
     indices = [node2id_w[hpo] for hpo in all_hpo if hpo in node2id_w]
     known_pos = [i for i, hpo in enumerate(all_hpo) if hpo in node2id_w]
-    W_known = torch.tensor(W[indices], dtype=torch.float64)
+    W_known = torch.tensor(W[indices], dtype=torch.float32)
     origin = torch.zeros_like(W_known)
     with torch.no_grad():
         hyp_norms = manifold.distance(W_known, origin, c=1.).cpu().numpy()
@@ -65,8 +65,8 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
     norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, model)
     print("Norms computed !")
     
-    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
-    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
+    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(np.float32)
+    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(np.float32)
 
     Aw = A * norms
     Bw = B * norms
@@ -81,8 +81,8 @@ def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_s
 
 
 def cost_hpos(hpoi, hpoj):
-    Ei = torch.tensor(hpoi, dtype=torch.float64).unsqueeze(1)
-    Ej = torch.tensor(hpoj, dtype=torch.float64).unsqueeze(0)
+    Ei = torch.tensor(hpoi, dtype=torch.float32).unsqueeze(1)
+    Ej = torch.tensor(hpoj, dtype=torch.float32).unsqueeze(0)
     manifold = PoincareManifold()
     dists = manifold.distance(Ei, Ej, c=1)
     return dists.detach().numpy()
@@ -98,8 +98,8 @@ def compute_all_distances(emb_i, all_emb_j):
     sizes_j = [len(e) for e in all_emb_j]
     E_all_j = np.concatenate(all_emb_j, axis=0)  # (sum_kj, d)
     
-    Ei = torch.tensor(emb_i, dtype=torch.float64).unsqueeze(1)       # (ki, 1, d)
-    Ej = torch.tensor(E_all_j, dtype=torch.float64).unsqueeze(0)     # (1, sum_kj, d)
+    Ei = torch.tensor(emb_i, dtype=torch.float32).unsqueeze(1)       # (ki, 1, d)
+    Ej = torch.tensor(E_all_j, dtype=torch.float32).unsqueeze(0)     # (1, sum_kj, d)
     
     manifold = PoincareManifold()
     dists = manifold.distance(Ei, Ej, c=1).detach().numpy()          # (ki, sum_kj)
@@ -127,7 +127,7 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
         Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
         le vecteur de poids uniformes associés.
         '''
-        X = df[hpo_cols].to_numpy(dtype=float)
+        X = df[hpo_cols].to_numpy(dtype=np.float32)
         resolved_cols = np.array([deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], dtype=object)
         valid_mask = resolved_cols != None
         X_valid = X[:, valid_mask]
@@ -144,18 +144,7 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
             terms.append(row_terms)
             weights.append(row_weights)
         return terms, weights
-    '''
-        X = df[hpo_cols].to_numpy(dtype=bool)
-        resolved_cols = np.array(
-            [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
-            dtype=object)
-        valid_mask = resolved_cols != None
-        X_valid = X[:, valid_mask]
-        resolved_valid = resolved_cols[valid_mask]
-        terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
-        weights = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
-        return terms, weights
-'''
+
     terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
     terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
     print("Finished !")
@@ -169,23 +158,19 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
     idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
 
-    # emb_i = [E[idx] if idx else None for idx in idx_i]  # [Ajout] Vecteurs d'embeddings par maladies sources
-    # emb_j = [E[idx] if idx else None for idx in idx_j]  # [Ajout] Vecteurs d'embeddings par maladies destinations
-
     C = np.zeros((n,m))
 
     print("Precomputing full HPO distance matrix...")
-    # D_full = np.sum((E[:, None, :] - E[None, :, :]) ** 2, axis=-1)  # (K, K)
     K = E.shape[0]
     D_full = np.zeros((K, K), dtype=np.float32)
-    BLOCK = 256  # Réduire si encore OOM (128, 64...)
+    BLOCK = 256  # On calcule par blocs pour éviter d'exploser la mémoire
     with torch.no_grad():
         for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
-            Ei = E[i:i+BLOCK]          # (b, dim)
+            Ei = E[i:i+BLOCK]
             b = Ei.shape[0]
             
             for j in range(0, K, BLOCK):
-                Ej = E[j:j+BLOCK]      # (b2, dim)
+                Ej = E[j:j+BLOCK]
                 b2 = Ej.shape[0]
                 
                 Ei_exp = Ei.unsqueeze(1).expand(b, b2, -1).reshape(b * b2, -1)
@@ -195,8 +180,6 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
                 D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
     
     print(f"HPO distance matrix: {D_full.shape}")
-    #valid_is = [i for i in range(len(df_omim)) if idx_i[i]]
-    #valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
     
     def self_transport(idx, w):
         M = D_full[np.ix_(idx, idx)]
@@ -246,8 +229,8 @@ def cost_matrix_hamm(df_omim, df_orpha, weights, block_size=256):
     all_hpo = list(hpo_cols)
     w = np.array([weights.get(hp, 0.0) for hp in all_hpo])
 
-    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(float)
-    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(float)
+    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(np.float32)
+    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(np.float32)
     
     A = (A > 0).astype(np.float32)  # Transformation en des datasets binaires dans le cas où on a des fréquences
     B = (B > 0).astype(np.float32)  # Transformation en des datasets binaires dans le cas où on a des fréquences
@@ -276,8 +259,8 @@ def basic_cost_matrix(df_omim, df_orpha, dist_method):
         - dist_method : 'euclidean', 'hamming', 'jaccard' 
     """
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
-    X = df_omim[hpo_cols].to_numpy().astype(float)
-    Y = df_orpha[hpo_cols].to_numpy().astype(float)
+    X = df_omim[hpo_cols].to_numpy().astype(np.float32)
+    Y = df_orpha[hpo_cols].to_numpy().astype(np.float32)
     if dist_method == 'euclidean':
         distance_matrix = pairwise_distances(X, Y, metric=dist_method, n_jobs=-1)
     if dist_method == 'jaccard':
@@ -590,12 +573,19 @@ def evaluate_transport_proba(P, gt_set, seuil):
     '''
     marginal_a = np.sum(P, axis=1)
     marginal_b = np.sum(P, axis=0)
-    S = (np.divide(P, marginal_a)+np.divide(P, marginal_b))/2
-    S = (S>seuil).astype(int)
-    tp=0
-    for (i,j) in gt_set:
-        tp+=S[i,j]
-    return tp/sum(S), tp/len(gt_set)
+    S = (np.divide(P, marginal_a[:, None])+np.divide(P, marginal_b[None, :]))/2
+    S = (S > seuil).astype(int)
+    predicted_positives = S.sum()
+    if predicted_positives == 0:
+        return None, None
+    else: 
+        tp=0
+        for (i,j) in gt_set:
+            tp += S[i,j]
+        precision = tp / predicted_positives
+        recall = tp/len(gt_set)
+        return precision, recall
+
 
 def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
     ax[0].loglog(reg_strengths, plan_diff, lw=4)
@@ -742,3 +732,30 @@ def plot_unbalanced(taus, C, epsilon, gt_set):
 
     plt.tight_layout()
     plt.show()
+
+def plot_PR_curve(P, gt_set, seuils):
+    '''
+    Courbe précision-rappel calculée sur le plan de transport, à partir de la probabilité
+    d'association obtenue grâce à evaluate_transport_proba.
+    Entrées :
+        - P : plan de transport.
+        - gt_set : vérité de terrain.
+        - seuils : liste de seuils s, sur les probabilités d'associations.
+    Sortie : 
+        - plot de la courbe PR.
+    '''
+    precision, recall = [], []
+    for s in seuils:
+        acc, rec = evaluate_transport_proba(P, gt_set, s)
+        if acc is not None:
+            precision.append(acc)
+            recall.append(rec)
+    # Plot
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(4,4))
+    sns.lineplot(x=recall, y=precision, markers='X', ax=ax)
+    ax.set_ylim(0,1)
+    ax.set_xlim(0,1)
+    ax.set_title('Courbe précision-rappel')
+    plt.tight_layout()
+    plt.plot()

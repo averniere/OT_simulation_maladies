@@ -1,15 +1,14 @@
 import torch
-import pandas as pd 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import tempfile, os
 
 from collections import deque
+from pathlib import Path
 from itertools import combinations
 from tqdm import tqdm
 from sklearn.decomposition import PCA
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from frechetmean import frechet_mean
 
@@ -367,3 +366,23 @@ def visualize_barycenter(profils_omim, node2id, model, deprecated, disease_ids, 
     )
     plt.tight_layout()
     plt.show()
+
+
+def save_method(dict_method, method_name, savedir=Path("../data/utils")):
+    savedir.mkdir(parents=True, exist_ok=True)
+    entry = dict_method[method_name]  # dict de tableaux
+    path = SAVE_DIR / f"{method_name}.npz"
+    fd, tmp_path = tempfile.mkstemp(dir=SAVE_DIR, suffix=".npz")
+    os.close(fd)
+    np.savez_compressed(tmp_path, **entry)
+    os.replace(tmp_path, path)
+
+
+def load_all_methods(savedir=Path("../data/utils")):
+    savedir.mkdir(parents=True, exist_ok=True)
+    dict_method = {}
+    for f in savedir.glob("*.npz"):
+        loaded = np.load(f)
+        dict_method[f.stem] = {k: loaded[k] for k in loaded.files}
+        loaded.close()
+    return dict_method
