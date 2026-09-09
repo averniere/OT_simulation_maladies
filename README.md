@@ -24,16 +24,16 @@ Le dépôt s'articule autour des dossiers suivant :
 5. `OT`, qui contient le processus de simulations de maladies complexes.
 
 ## Organisation des fichiers
-Les dossiers 2, 3, et 4 contiennent chacun un fichier `main.py` à exécuter pour apprendre la représentation souhaitée. <br>
+Dossier `Embeddings`:
+- `batched_dataset.py`, `lorentz.py`, `model.py`, `main.py`, `poincare.py`, `RSGD.py`, `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
+- `data.py` permet de charger les tables d'annotations de maladies, les interactions PPI, gène-maladie, gène-protéine. `statistiques_descriptives.ipynb` est un notebook présentant les premières statistiques descriptives relatives aux données chargées.
+- `data_utils.py`, `OT_utils.py`, `information_content.py`, `tsw.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Les notebooks `test.ipynb` et `brouillon.ipynb` contiennent les résultats.
+- `evaluation.py` contient les fonctions utilisées pour prédire ou non une bonne association (encore en exploration).
+- `simulations_add_metrics.py`, `simulations_process.py`, `simulations.py` et le dossier `simuls` reprennent le cadre de simulation de maladies complexes à partir de maladies mendéliennes.
 
-Les données sont chargées à partir du fichier `load_data.py` dans les dossiers `Disease_Embeddings` et `HGCN` et à partir du fichier `data.py` dans le dossier `Embeddings`.<br>
-
-Les codes des fonctions de coûts sont dans les fichiers `OT.py` ou `OT_utils.py`.<br>
-
-Les différents dossiers contiennent un ou plusieurs notebooks d'analyse des résultats. Les plus importants sont les fichiers `test.ipynb` dans les dossiers `Embeddings`et `HGCN`.<br>
-
-Le fichier `evaluation.py` du dossier `Embeddings` permet de construire le modèle de régression logistique pour prédire la validité ou non d'une association. Attention, de même fichier dans le dossier `HGCN` n'est pas à jour.
-
+Dossier `HGCN` :
+    - `decoder.py`, `encoder.py`, `hyp_layer.py`, `main.py`, `model.py`, `poincare.py`, `RiemAdam.py`, `RSGD.py` et `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
+    - 
 ## Où trouver les fonctions Python utiles
 
 Dans le dossier `Embeddings`:

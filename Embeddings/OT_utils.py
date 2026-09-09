@@ -16,6 +16,11 @@ from collections import defaultdict
 from poincare import PoincareManifold
 
 
+#===========================================================================================
+#================================== Matrices de coût =======================================
+#===========================================================================================
+
+
 def compute_cost_matrix(omim, orpha):
     """ 
     Distance de Poincaré entre barycentres.
@@ -303,6 +308,78 @@ def correlation_cost(df1, df2):
     return 1-C
 
 
+def resnik_disease_similarities(df_omim, df_orpha, resnik_hpos, method):
+    n = df_omim.shape[0]
+    m = df_orpha.shape[0]
+
+    colnames = [c for c in df_omim.columns if c.startswith('HP:')]
+    X = df_omim[colnames].values
+    Y = df_orpha[colnames].values
+    n_active_x = X.sum(axis=1)
+    n_active_y = Y.sum(axis=1)
+
+    M = np.exp(-resnik_hpos)  # Matrice de similarités entre termes
+    T = X.shape[1]
+    d_max = M.max()
+    
+    if method == 'sum':
+        C = X @ M @ Y.T
+
+    if method == 'mean':
+        S = X @ M @ Y.T
+        n_active_x = X.sum(axis=1, keepdims=True)
+        n_active_y = Y.sum(axis=1, keepdims=True)
+        denom = n_active_x @ n_active_y.T
+        denom[denom == 0] = 1
+        return S / denom
+
+    Q = np.full((n, T), d_max*2)
+    for i in tqdm(range(n)):
+        active_i = np.where(X[i] == 1)[0]  # termes actifs de la maladie i
+        if len(active_i) == 0:
+            continue
+        Q[i, :] = M[active_i, :].min(axis=0)
+    
+    R = np.full((T, m), d_max*2)
+    for j in tqdm(range(m)):
+        active_j = np.where(Y[j] == 1)[0]  # termes actifs de la maladie j
+        if len(active_j) == 0:
+                continue
+        R[:, j] = M[:, active_j].min(axis=1)
+
+    row_sum = X @ np.where(np.isinf(R), d_max*2, R)
+    row_best_mean = row_sum / np.maximum(n_active_x[:, None], 1)
+
+    col_sum = np.where(np.isinf(Q), d_max*2, Q) @ Y.T
+    col_best_mean = col_sum / np.maximum(n_active_y[None, :], 1)
+
+    if method == 'funSimAvg':
+        return (row_best_mean + col_best_mean) / 2
+
+    if method == 'funSimMax':
+        return np.minimum(row_best_mean, col_best_mean)  # distance : min = meilleur
+
+    if method == 'bma':
+        denom = n_active_x[:, None] + n_active_y[None, :]
+        return (row_sum + col_sum) / denom
+
+    if method == 'max':
+        C = np.full((n, m), np.inf)
+        for i in range(n):
+            active_i = np.where(X[i] == 1)[0]
+            if len(active_i) == 0:
+                continue
+            C[i, :] = R[active_i, :].min(axis=0)
+        C = np.where(np.isinf(C), d_max*2, C)
+        return C
+
+    raise ValueError(f"Méthode inconnue : {method}")
+
+#===========================================================================================
+#=============================== Méthodes de transport =====================================
+#===========================================================================================
+
+
 def compute_transport(
     C: np.ndarray,
     a: np.ndarray,
@@ -386,6 +463,9 @@ def compute_unbalanced(C: np.ndarray,
 
     return optimal_plan_sinkhorn, optimal_cost_sinkhorn
 
+#===========================================================================================
+#============================== Evaluation des résultats ===================================
+#===========================================================================================
 
 
 def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
@@ -528,8 +608,11 @@ def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
     ax[1].tick_params(which='both', size=20)
     ax[1].grid(ls='--') 
 
+#===========================================================================================
+#============================== Régularisation laplacienne =================================
+#===========================================================================================
 
-# Régularisation Laplacienne
+
 def simi_ppi(df):
     '''
     Construction d'une matrice de similarités à partir des interactions protéine-protéine.
