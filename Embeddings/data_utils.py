@@ -424,3 +424,35 @@ def build_pairs_dictionary(pairs, df_omim, df_orpha, df):
         "commun":set(omim_hpos)&set(orpha_hpos),
         }
     return dico 
+
+
+def find_lca(u, v, ancestors, depths):
+    """Trouve le plus proche ancêtre commun entre deux noeuds"""
+    if u==v:
+        return u, depths[u]
+    parents_u = ancestors[u]
+    parents_v = ancestors[v]
+    parents = set(parents_u) & set(parents_v)
+    if not parents:
+        return None, 0  # -np.inf ?
+    lca = max(parents, key=lambda n: depths[n])
+    return lca, depths[lca]
+
+
+def shortest_path(d1, d2, depths, ancestors):
+    '''
+    Entrées :
+        - d1, d2 : maladies sous la forme de liste de leurs termes HPO actifs.
+        - depths : dictionnaire des profondeurs.
+        - ancestors : dictionnaire des ancêtres.
+    Sortie :
+        - Plus court chemin moyen des termes de d1 aux termes de d2.
+    Attention, shortest_path(d1, d2)
+    '''
+    dists=[]
+    for t in d1:
+        d_t = depths[t]
+        for s in d2:
+            _, d_lca = find_lca(t, s, ancestors, depths)
+            dists.append(d_t + depths[s] - 2*d_lca)
+    return np.mean(dists)
