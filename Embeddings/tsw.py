@@ -25,7 +25,7 @@ class tsw:
         self.node2id = {n: i for i, n in enumerate(self.nodes)}
         self.parents = [list(G.successors(node)) for node in self.nodes]
         self.children = [list(G.predecessors(node)) for node in self.nodes]
-        self.order = self._sort(root)
+        self.order = self._sort_dag(root)
         self.order_indices = np.array([self.node2id[node] for node in self.order])
         edge_weight = []
         for node in self.order:
@@ -72,16 +72,32 @@ class tsw:
                     q.append(child)
         return list(reversed(bfs))
 
+    def _sort_dag(self, root):
+        '''
+        Retourne les nœuds dans un ordre topologique (tout enfant avant
+        ses parents), valable pour un arbre comme pour un DAG à parents
+        multiples.
+        '''
+        relevant = nx.ancestors(self.G, root) | {root}
+        subG = self.G.subgraph(relevant)
+        return list(nx.topological_sort(subG))
+
     def prepare_disease(self, diseases):
         '''
         Input:
             - diseases : dataframe avec les maladies de taille (n, m').
         Output:
-            - new_M : ndarray de taille (n, m) encodé sur les d noeuds du graphe, de valeurs 0 ou 1/n_actif.
+            - new_M : ndarray de taille (n, m) encodé sur les noeuds du graphe, de valeurs 0 ou 1/n_actif.
         '''
         hpo_cols = [c for c in diseases.columns if c.startswith('HP')]
-        hpo_ids = [self.node2id[hpo] for hpo in hpo_cols]
-        M = diseases.values
+        hpo_ids = [self.node2id[hpo] for hpo in hpo_cols]  # Identifiant des termes HP dans le graphe
+        missing = [c for c in hpo_cols if c not in self.node2id]
+        print(f"{len(missing)} colonnes HPO absentes du graphe :", missing[:20])
+        M = diseases[hpo_cols].values
+        row_sums_M = np.sum(M, axis=1, keepdims=True)
+        empty_M = np.sum(row_sums_M[:, 0]==0)
+        print(f"{empty_M} maladies sans termes actifs")
+        print(np.where(row_sums_M[:, 0]==0))
         d = M.shape[0]  # Nombre de maladies
         new_M = np.zeros((d, self.n), dtype=np.int32)
         for i in range(d):
@@ -89,7 +105,12 @@ class tsw:
                 if M[i, j]==1:
                     idx = hpo_ids[j]
                     new_M[i, idx] = 1
-        new_M = new_M/np.sum(new_M, axis=1, keepdims=True)
+        row_sums = np.sum(new_M, axis=1, keepdims=True)
+        n_empty = np.sum(row_sums[:, 0] == 0)
+        if n_empty > 0:
+            print(f"{n_empty} maladies sans HPO reconnu dans le graphe")
+
+        new_M = np.divide(new_M, row_sums, out=np.zeros_like(new_M, dtype=np.float32), where=row_sums != 0)
         return new_M
 
     def f_tsw(self, d1, d2):
@@ -175,12 +196,12 @@ def precompute_tsw_matrix(SM1, SM2, w):
 def transport(C, epsilon, gt_set, a=None, b=None):
     print("======== Sans régularisation ========")
     ot_plan, ot_cost = compute_transport(C, a, b)
-    ranks, _, pairs, _ = evaluate_transport(ot_plan, gt_set, C)
+    ranks, _, pairs, _, _ = evaluate_transport(ot_plan, gt_set, C)
 
     print("======== Avec régularisation ========")
     print(epsilon)
     ot_plan_reg, ot_cots_reg = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
-    ranks_reg, _, pairs_reg, _ = evaluate_transport(ot_plan_reg, gt_set, C)
+    ranks_reg, _, pairs_reg, _, _ = evaluate_transport(ot_plan_reg, gt_set, C)
     return ranks_reg, pairs_reg, ot_plan_reg
 
 
