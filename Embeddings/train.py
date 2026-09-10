@@ -89,7 +89,7 @@ def train(
                 d_pos = model.manifold.distance(z_u, z_pos, model.c)
                 ce_pos = -F.logsigmoid(-d_pos).mean()
     
-            loss = model.loss(scores, targets) + lambda_pos*ce_pos
+            loss = model.loss(scores, targets) #+ lambda_pos*ce_pos
             loss.backward()
 
             optimizer.step(lr=current_lr)

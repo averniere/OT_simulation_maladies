@@ -63,7 +63,7 @@ class Distance_PE(Poincarre_embeddings):
                     continue
                 z_u = embeddings[u_id]
                 z_pos = embeddings[pos_ids_t]
-                print("Appel distanes")
+                print("Appel distances")
                 d_pos = self.manifold.distance(z_u.unsqueeze(0).expand_as(z_pos), z_pos, self.c)
                 print("Appel softmax")
                 ce_pos = ce_pos + F.log_softmax(-d_pos, dim=0).sum()

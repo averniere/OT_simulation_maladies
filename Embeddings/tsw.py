@@ -2,12 +2,9 @@ import networkx as nx
 import numpy as np
 import numba
 from collections import deque
-from scipy.spatial.distance import cdist
 from tqdm import tqdm
 from data import *
-from information_content import get_ancestors0, compute_information_content
 from OT_utils import compute_transport_sinkhorn, compute_transport, evaluate_transport
-from data_utils import f_ground_truth
 
 
 class tsw:

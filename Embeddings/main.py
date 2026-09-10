@@ -19,27 +19,27 @@ from OT_utils import *
 
 # TEST : on relie les termes présents dans une même maladie ----------------------------------
 
-union_diseases = add_corresponding_terms(work_omim, work_orpha, df_orpha_omim)
-G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
+#union_diseases = add_corresponding_terms(work_omim, work_orpha, df_orpha_omim)
+#G_hpo_omim = add_edges(union_diseases, G_hpo_work, depths)
 # Cas particulier : on relie manuellement le noeud à son parent dans le sens enfant-parent
-G_hpo_omim.add_edge('HP:6001347', 'HP:0001832')
+#G_hpo_omim.add_edge('HP:6001347', 'HP:0001832')
+
+#objects_omim = list(G_hpo_omim.nodes())
+#node2id_omim = {n: i for i, n in enumerate(objects_omim)}
+#edges_omim = np.array([(node2id_omim[u], node2id_omim[v]) for u, v in G_hpo_omim.edges()],dtype=np.int32)
+#print(f"{len(edges_omim)} arêtes et {len(objects_omim)} noeuds")
 
 # --------------------------------------------------------------------------------------------
-
-objects_omim = list(G_hpo_omim.nodes())
-node2id_omim = {n: i for i, n in enumerate(objects_omim)}
-edges_omim = np.array([(node2id_omim[u], node2id_omim[v]) for u, v in G_hpo_omim.edges()],dtype=np.int32)
-print(f"{len(edges_omim)} arêtes et {len(objects_omim)} noeuds")
-
-objects = list(G_hpo_work.nodes())
+G_hpo_work0 = G_hpo_work.reverse()
+objects = list(G_hpo_work0.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work.edges()],dtype=np.int32)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work0.edges()],dtype=np.int32)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
 # Voisins dans le graphe raccordé
-pos_neighbors = [set() for _ in range(len(objects_omim))]
-for u, v in edges_omim:
-    pos_neighbors[int(u)].add(int(v))
+pos_neighbors = [set() for _ in range(len(objects))]
+for u, v in edges:
+    pos_neighbors[int(v)].add(int(u))
 
 all_u_pos = []
 all_v_pos = []
@@ -77,7 +77,7 @@ DIM = 15
 EPOCHS = 1500
 LR0 = 0.4
 BURN_IN = 100
-NNEGS = 50
+NNEGS = 100
 BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
@@ -111,9 +111,6 @@ else:
 
 print('Données')
 data = BatchedDataset(edges, objects, nnegs=NNEGS, batch_size=BATCH_SIZE, pos_neighbors=pos_neighbors, pos_ratio=POS_RATIO)
-#data = BatchedDatasetNode2Vec(G_hpo_omim, edges, True, P, Q, BATCH_SIZE, NNEGS, WINDOW_SIZE, REFRESH)
-# print('Preprocess (partly) transition probabilities')
-# data.preprocess_transition_probs()
 
 
 def get_dir_name(models_dir):
