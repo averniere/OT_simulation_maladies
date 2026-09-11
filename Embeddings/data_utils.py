@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import tempfile, os
 
-from collections import deque
+from collections import defaultdict
 from pathlib import Path
 from itertools import combinations
 from tqdm import tqdm
+from sklearn.metrics import average_precision_score
 from sklearn.decomposition import PCA
 
 from frechetmean import frechet_mean
@@ -71,31 +72,6 @@ def add_corresponding_terms(df1, df2, correspondances):
     return result
 
 
-def compute_depths(objects, data):
-    children = {i: [] for i in range(len(objects))}
-    for i in range(len(objects)):
-        for parent in data.pos_neighbors[i]:
-            children[parent].append(i)
-    has_parent = set()
-    for i in range(len(objects)):
-        for parent in data.pos_neighbors[i]:
-            has_parent.add(i)
-    roots = [i for i in range(len(objects)) if i not in has_parent]
-    print(roots)
-    depths = np.full(len(objects), -1)
-    queue = deque()
-    for r in roots:
-        depths[r] = 0
-        queue.append(r)
-    while queue:
-        node = queue.popleft()
-        for child in children[node]:
-            if depths[child] == -1:
-                depths[child] = depths[node] + 1
-                queue.append(child)
-    return depths
-
-
 def f_active_terms(row, hpo_cols, node2id, deprecated):
     active = []
     for term in hpo_cols:
@@ -116,6 +92,38 @@ def len_active_terms(row, hpo_cols, node2id, deprecated):
     return len(active)
 
 
+def find_lca(u, v, ancestors, depths):
+    """Trouve le plus proche ancêtre commun entre deux noeuds"""
+    if u==v:
+        return u, depths[u]
+    parents_u = ancestors[u]
+    parents_v = ancestors[v]
+    parents = set(parents_u) & set(parents_v)
+    if not parents:
+        return None, 0  # -np.inf ?
+    lca = max(parents, key=lambda n: depths[n])
+    return lca, depths[lca]
+
+
+def shortest_path(d1, d2, depths, ancestors):
+    '''
+    Entrées :
+        - d1, d2 : maladies sous la forme de liste de leurs termes HPO actifs.
+        - depths : dictionnaire des profondeurs.
+        - ancestors : dictionnaire des ancêtres.
+    Sortie :
+        - Plus court chemin moyen des termes de d1 aux termes de d2.
+    Attention, shortest_path(d1, d2)
+    '''
+    dists=[]
+    for t in d1:
+        d_t = depths[t]
+        for s in d2:
+            _, d_lca = find_lca(t, s, ancestors, depths)
+            dists.append(d_t + depths[s] - 2*d_lca)
+    return np.mean(dists)
+
+
 def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
     omim_to_idx = {v: i for i, v in enumerate(work_omim['database_id'].values)} 
     orpha_to_idx = {v: i for i, v in enumerate(work_orpha['database_id'].values)}
@@ -134,22 +142,59 @@ def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
     return gt_set, valid_omim, valid_orpha
 
 
-def build_disease_correspondence(df):
+@torch.no_grad()
+def evaluate_embedding(model, objects, edges, node2id, device):
     """
-    Construit une table de correspondance OMIM <-> ORPHA basée sur le nom des maladies.
+    Retourne MAP et mean rank.
     """
-    omim = df[df['database_id'].str.startswith('OMIM:')][['disease_name', 'database_id']].drop_duplicates()
-    orpha = df[df['database_id'].str.startswith('ORPHA:')][['disease_name', 'database_id']].drop_duplicates()
+    model.eval()
+    W = model.weight.to(device)  # (N, dim)
 
-    correspondence = omim.merge(orpha, on='disease_name', suffixes=('_omim', '_orpha'))
-    
-    return correspondence.rename(columns={
-        'database_id_omim' : 'omim_id',
-        'database_id_orpha': 'orpha_id'
-    })[['disease_name', 'omim_id', 'orpha_id']]
+    pos_neighbors = defaultdict(set)
+    for u, v in edges:
+        pos_neighbors[int(u)].add(int(v))
+
+    ap_scores = []
+    ranks_all = []
+    N = W.shape[0]
+    labels = np.zeros(N)
+
+    for obj in tqdm(objects):
+        u = int(node2id[obj])
+        neighbors = pos_neighbors.get(u, set())
+        if not neighbors:
+            continue
+
+        # Distances GPU avec la bonne courbure
+        u_emb = W[u].unsqueeze(0).expand(N, -1)   # (N, dim)
+        dists = model.manifold.distance(u_emb, W, model.c)  # (N,)
+        dists[u] = float('inf')                    # exclure u lui-même
+        dists_np = dists.cpu().numpy()
+
+        max_finite = dists_np[np.isfinite(dists_np)].max()
+        dists_np[~np.isfinite(dists_np)] = max_finite + 1.0
+
+        # Rang des voisins
+        sorted_ind = np.argsort(dists_np)
+        ranks = np.where(np.isin(sorted_ind, list(neighbors)))[0] + 1
+        # Correction : soustraire les rangs des autres voisins placés avant
+        n_neighbors = len(neighbors)
+        corrected_ranks = ranks - np.arange(n_neighbors)
+        ranks_all.extend(corrected_ranks.tolist())
+
+        # AP
+        labels.fill(0)
+        labels[list(neighbors)] = 1
+        ap_scores.append(average_precision_score(labels, -dists_np))
+
+    map_score = float(np.mean(ap_scores))
+    mean_rank = float(np.mean(ranks_all))
+
+    model.train()
+    return {'MAP': map_score, 'Rang moyen' : mean_rank}
 
 
-def compute_disease_barycenters(profils_omim, node2id, model, deprecated, weights=None, normalize=False, c=1):
+def compute_disease_barycenters(profils_omim, node2id, model, colname, deprecated, weights=None, normalize=False, c=1):
     '''
     Entrées : 
         - profils_omim : dataset d'annotations de maladies.
@@ -192,33 +237,33 @@ def compute_disease_barycenters(profils_omim, node2id, model, deprecated, weight
         barycenter = frechet_mean(points, c, w)
         barycenters.append(barycenter.numpy())
 
-    profils_omim['barycenter'] = barycenters
+    profils_omim[colname] = barycenters
     return profils_omim
  
 
-def compare_barycenters(profils_uniform, profils_weighted, model, node2id, deprecated, weights, disease_id=3):
+def compare_barycenters(df, colname1, colname2, model, node2id, deprecated, weights, disease_id=3):
     model.eval()
     W = model.weight.detach().cpu().numpy()
 
-    row = profils_uniform.loc[disease_id]
-    hpo_cols = [col for col in profils_uniform.columns if col.startswith('HP:')]
+    row = df.loc[disease_id]
+    hpo_cols = [col for col in df.columns if col.startswith('HP:')]
     active = [col for col in hpo_cols if row[col] == 1 and deprecated.get(col, col) in node2id]
 
     embs = np.stack([W[node2id[deprecated.get(t, t)]] for t in active])
-    bary_uni = profils_uniform.loc[disease_id, 'barycenter']
-    bary_w = profils_weighted.loc[disease_id, 'barycenter']
-    root = W[node2id['HP:0000001']]
+    bary1 = df.loc[disease_id, colname1]
+    bary2 = df.loc[disease_id, colname2]
+    root = W[node2id['HP:0000118']]
 
     # PCA commune pour les deux plots
-    all_points = np.vstack([embs, bary_uni, bary_w, root])
+    all_points = np.vstack([embs, bary1, bary2, root])
     pca = PCA(n_components=2)
     proj = pca.fit_transform(all_points)
     max_norm = np.linalg.norm(proj, axis=1).max()
     proj = proj / max_norm
 
     embs_2d = proj[:-3]
-    bary_uni2d = proj[-3]
-    bary_w2d = proj[-2]
+    bary1_2d = proj[-3]
+    bary2_2d = proj[-2]
     root_2d = proj[-1]
 
     norms = np.linalg.norm(embs, axis=1)
@@ -226,13 +271,13 @@ def compare_barycenters(profils_uniform, profils_weighted, model, node2id, depre
     w_norm = w_vals / w_vals.sum()
     sizes_w = 20 + 300 * w_norm / w_norm.max()
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6))
 
     for ax, bary_2d, bary_arr, title, sizes in zip(
         axes[:2],
-        [bary_uni2d, bary_w2d],
-        [bary_uni,   bary_w],
-        ['Poids uniformes', 'Poids information content'],
+        [bary1_2d, bary2_2d],
+        [bary1,   bary2],
+        [colname1, colname2],
         [np.full(len(active), 40), sizes_w]
     ):
         circle = plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', linewidth=0.8)
@@ -246,9 +291,9 @@ def compare_barycenters(profils_uniform, profils_weighted, model, node2id, depre
             ax.plot([pt[0], bary_2d[0]], [pt[1], bary_2d[1]],
                     color='gray', alpha=0.15, linewidth=0.5, zorder=2)
 
-        ax.scatter(*bary_2d, s=250, c='red',  marker='*', zorder=5,
+        ax.scatter(*bary_2d, s=250, c='red',  marker='X', zorder=5,
                    label=f'Barycentre (norme={np.linalg.norm(bary_arr):.3f})')
-        ax.scatter(*root_2d, s=150, c='blue', marker='D', zorder=5, label='Racine')
+        ax.scatter(*root_2d, s=150, c='blue', marker='X', zorder=5, label='Racine')
 
         plt.colorbar(sc, ax=ax, label='norme HPO')
         ax.set_xlim(-1.1, 1.1)
@@ -257,36 +302,196 @@ def compare_barycenters(profils_uniform, profils_weighted, model, node2id, depre
         ax.legend(fontsize=8)
         ax.set_title(title)
 
-    # Panneau 3 : distribution des normes colorée par poids
-    ax3 = axes[2]
-    sc3 = ax3.scatter(norms, w_norm, c=norms, cmap='plasma', s=30, alpha=0.7)
-    ax3.axvline(np.linalg.norm(bary_uni), color='green',  linestyle='--',
-                label=f'Barycentre uniforme ({np.linalg.norm(bary_uni):.3f})')
-    ax3.axvline(np.linalg.norm(bary_w),   color='red',    linestyle='--',
-                label=f'Barycentre pondéré ({np.linalg.norm(bary_w):.3f})')
-    ax3.set_xlabel('Norme du terme HPO (proximité du bord)')
-    ax3.set_ylabel('Poids normalisé')
-    ax3.set_title('Poids vs norme des termes actifs')
-    ax3.legend(fontsize=8)
-    plt.colorbar(sc3, ax=ax3, label='norme')
 
     fig.suptitle(f'Maladie {disease_id} — {len(active)} termes HPO', fontsize=13)
     plt.tight_layout()
     plt.show()
 
 
-def visualize_barycenter(profils_omim, node2id, model, deprecated, disease_ids, weights=None):
+def save_method(dict_method, method_name, savedir=Path("../data/utils")):
+    savedir.mkdir(parents=True, exist_ok=True)
+    entry = dict_method[method_name]  # dict de tableaux
+    path = SAVE_DIR / f"{method_name}.npz"
+    fd, tmp_path = tempfile.mkstemp(dir=SAVE_DIR, suffix=".npz")
+    os.close(fd)
+    np.savez_compressed(tmp_path, **entry)
+    os.replace(tmp_path, path)
+
+
+def load_all_methods(savedir=Path("../data/utils")):
+    savedir.mkdir(parents=True, exist_ok=True)
+    dict_method = {}
+    for f in savedir.glob("*.npz"):
+        loaded = np.load(f)
+        dict_method[f.stem] = {k: loaded[k] for k in loaded.files}
+        loaded.close()
+    return dict_method
+
+
+def build_pairs_dictionary(pairs, df_omim, df_orpha, df):
+    '''
+    Entrées :
+        - pairs : ensemble (set) de paires de maladies (i,j).
+        - df_omim, df_orpha : bases de données Omim et Orpha.
+        - df : base de données initiale non filtrée, d'où l'on peut tirer les noms des maladies.
+    Sortie :
+        - Dictionnaire qui indique pour chaque paire, le nom de la maladie associée, le nombre de
+        termes actifs dans chacune des deux bases et la liste de ces termes.
+    '''
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP')]
+    X_omim = df_omim[hpo_cols].astype(int).values
+    X_orpha = df_orpha[hpo_cols].astype(int).values
+
+    omim_to_idx = {v: i for i, v in enumerate(df_omim['database_id'].values)} 
+    orpha_to_idx = {v: i for i, v in enumerate(df_orpha['database_id'].values)}
+
+    idx2omim = {t: v for v, t in omim_to_idx.items()}
+    idx2orpha = {t: v for v, t in orpha_to_idx.items()}
+
+    dico = {}
+    for (i, j) in pairs:
+        active_omim = np.where(X_omim[i,:]==1)[0]
+        active_orpha = np.where(X_orpha[j, :]==1)[0]
+        omim_hpos = [hpo_cols[k] for k in active_omim]
+        orpha_hpos = [hpo_cols[k] for k in active_orpha]
+        disease_i = pd.unique(df[df['database_id']==idx2omim[i]]['disease_name'])[0]
+        disease_j = pd.unique(df[df['database_id']==idx2orpha[j]]['disease_name'])[0]
+
+        dico[(i, j)] = {
+        "omim":  {"name": disease_i, "count": len(omim_hpos), "terms": omim_hpos},
+        "orpha": {"name": disease_j, "count": len(orpha_hpos), "terms": orpha_hpos},
+        "commun":set(omim_hpos)&set(orpha_hpos),
+        }
+    return dico 
+
+# =============================================================================================
+# ===================== Fonctions écrites mais non utilisées finalement =======================
+# =============================================================================================
+from itertools import combinations
+
+
+def build_disease_correspondence(df):
+    """
+    Construit une table de correspondance OMIM <-> ORPHA basée sur le nom des maladies.
+    """
+    omim = df[df['database_id'].str.startswith('OMIM:')][['disease_name', 'database_id']].drop_duplicates()
+    orpha = df[df['database_id'].str.startswith('ORPHA:')][['disease_name', 'database_id']].drop_duplicates()
+
+    correspondence = omim.merge(orpha, on='disease_name', suffixes=('_omim', '_orpha'))
+    
+    return correspondence.rename(columns={
+        'database_id_omim' : 'omim_id',
+        'database_id_orpha': 'orpha_id'
+    })[['disease_name', 'omim_id', 'orpha_id']]
+
+
+def disease_hpo_distances(disease_id, X, hpo_cols, node2id, model, deprecated):
+    '''
+    Entrées : 
+        - X : annotations sous la forme d'une matrice de taille n_maladies x n_hpo.
+        - disease_id : index de la maladie dans X.
+        - hpo_cols : liste des noms des colonnes de la matrice.
+        - node2id : dictionnaire {noeud : index dans le graphe/la représentation}
+        - model : modèle donnant accès à la représentation apprise.
+    Sortie :
+        - Dataframe regroupant les statistiques descriptives relatives aux distances entre les termes
+        actifs de la maladie considérée dans le disque de Poincaré.
+    '''
+    row = X[disease_id]
+    active_terms = np.where(row == 1)[0]
+
+    if len(active_terms) < 2:
+        print(f"Strictement moins de 2 termes HPO pour {disease_id}")
+        return None
     model.eval()
     W = model.weight.detach().cpu().numpy()
-    hpo_cols = [col for col in profils_omim.columns if col.startswith('HP:')]
+    embs = np.array([W[node2id[hpo_cols[i]]] for i in active_terms])
+
+    # Calculer toutes les distances par paires
+    pairs = list(combinations(range(len(active_terms)), 2))
+    distances = {}
+    for i, j in pairs:
+        u = torch.tensor(embs[i], dtype=torch.float64)
+        v = torch.tensor(embs[j], dtype=torch.float64)
+        d = model.manifold.distance(u, v, c=1).item()
+        distances[(active_terms[i], active_terms[j])] = d
+
+    dist_values = np.array(list(distances.values()))
+
+    stats = {
+        'disease': disease_id,
+        'n_terms': len(active_terms),
+        'mean_dist': dist_values.mean(),
+        'max_dist': dist_values.max(),
+        'min_dist': dist_values.min(),
+        'std_dist': dist_values.std(),
+    }
+
+    return active_terms, embs, distances, stats
+
+
+def compute_all_distances(df, model, node2id, deprecated):
+    '''
+    Version généralisée de la fonction précédente. Calcule les statistiques descriptives
+    des distances entre termes actifs dans le disque de Poincaré pour chaque maladie de df.
+    '''
+    hpo_cols = [c for c in df.columns if c.startswith('HP')]
+    results = []
+
+    model.eval()
+    W = model.weight.detach().cpu().numpy()
+
+    col_to_idx = {}
+    for col in hpo_cols:
+        resolved = deprecated.get(col, col)
+        if resolved in node2id:
+            col_to_idx[col] = node2id[resolved]
+
+    valid_cols = [col for col in hpo_cols if col in col_to_idx]
+    col_ids = torch.tensor([col_to_idx[col] for col in valid_cols], dtype=torch.long)
+
+    M = torch.tensor(df[valid_cols].values, dtype=torch.bool)
+    E = W[col_ids]
+
+    names = df.iloc[:, 0].tolist()
+
+    for (disease_id, name), row_mask in tqdm(zip(zip(df.index, names), M),total=len(df)):
+        idx = row_mask.nonzero(as_tuple=True)[0]
+        if len(idx) < 2:
+            continue
+        embs = E[idx]
+        n = len(embs)
+        ii, jj = torch.triu_indices(n, n, offset=1)
+        dists = model.manifold.distance(
+            torch.tensor(embs[ii], dtype=torch.float32), torch.tensor(embs[jj], dtype=torch.float32), c=1.
+            )
+        dists = np.array(dists)
+        results.append({
+            'disease': disease_id,
+            'name': name,
+            'n_terms': n,
+            'sum': dists.sum(),
+            'mean_dist': dists.mean(),
+            'max_dist': dists.max(),
+            'min_dist': dists.min(),
+            'std_dist': dists.std(),
+        })
+
+    return pd.DataFrame(results).reset_index(drop=True)
+
+
+def visualize_barycenter(df, colname, node2id, model, deprecated, disease_ids, weights=None):
+    model.eval()
+    W = model.weight.detach().cpu().numpy()
+    hpo_cols = [col for col in df.columns if col.startswith('HP:')]
     
     diseases_dict = {}
     for d in disease_ids:
-        row = profils_omim.loc[d]
+        row = df.loc[d]
         active = [col for col in hpo_cols if row[col] == 1 and deprecated.get(col, col) in node2id]
         embs = np.stack([W[node2id[deprecated.get(t, t)]] for t in active])
-        bary = row['barycenter']
-        diseases_dict[d]={'active': active, 'embs': embs, 'bary': bary}
+        bary = row[colname]
+        diseases_dict[d] = {'active': active, 'embs': embs, 'bary': bary}
     root = W[node2id['HP:0000001']]
 
     # PCA dans l'espace ambiant sur les termes actifs + barycentre + racine
@@ -354,8 +559,7 @@ def visualize_barycenter(profils_omim, node2id, model, deprecated, disease_ids, 
         ax.annotate(str(d), xy=bary_2d,
                     xytext=(bary_2d[0] + 0.03, bary_2d[1] + 0.03),
                     fontsize=8, color=color, zorder=7,
-                    arrowprops=dict(arrowstyle='-', color=color,
-                                    lw=0.5, alpha=0.5))
+                    arrowprops=dict(arrowstyle='-', color=color, lw=0.5, alpha=0.5))
 
     ax.set_xlim(-1.15, 1.15)
     ax.set_ylim(-1.15, 1.15)
@@ -367,92 +571,3 @@ def visualize_barycenter(profils_omim, node2id, model, deprecated, disease_ids, 
     )
     plt.tight_layout()
     plt.show()
-
-
-def save_method(dict_method, method_name, savedir=Path("../data/utils")):
-    savedir.mkdir(parents=True, exist_ok=True)
-    entry = dict_method[method_name]  # dict de tableaux
-    path = SAVE_DIR / f"{method_name}.npz"
-    fd, tmp_path = tempfile.mkstemp(dir=SAVE_DIR, suffix=".npz")
-    os.close(fd)
-    np.savez_compressed(tmp_path, **entry)
-    os.replace(tmp_path, path)
-
-
-def load_all_methods(savedir=Path("../data/utils")):
-    savedir.mkdir(parents=True, exist_ok=True)
-    dict_method = {}
-    for f in savedir.glob("*.npz"):
-        loaded = np.load(f)
-        dict_method[f.stem] = {k: loaded[k] for k in loaded.files}
-        loaded.close()
-    return dict_method
-
-
-def build_pairs_dictionary(pairs, df_omim, df_orpha, df):
-    '''
-    Entrées :
-        - pairs : ensemble (set) de paires de maladies (i,j).
-        - df_omim, df_orpha : bases de données Omim et Orpha.
-        - df : base de données initiale non filtrée, d'où l'on peut tirer les noms des maladies.
-    Sortie :
-        - Dictionnaire qui indique pour chaque paire, le nom de la maladie associée, le nombre de
-        termes actifs dans chacune des deux bases et la liste de ces termes.
-    '''
-    hpo_cols = [c for c in df_omim.columns if c.startswith('HP')]
-    X_omim = df_omim[hpo_cols].astype(int).values
-    X_orpha = df_orpha[hpo_cols].astype(int).values
-
-    omim_to_idx = {v: i for i, v in enumerate(df_omim['database_id'].values)} 
-    orpha_to_idx = {v: i for i, v in enumerate(df_orpha['database_id'].values)}
-
-    idx2omim = {t: v for v, t in omim_to_idx.items()}
-    idx2orpha = {t: v for v, t in orpha_to_idx.items()}
-
-    dico = {}
-    for (i, j) in pairs:
-        active_omim = np.where(X_omim[i,:]==1)[0]
-        active_orpha = np.where(X_orpha[j, :]==1)[0]
-        omim_hpos = [hpo_cols[k] for k in active_omim]
-        orpha_hpos = [hpo_cols[k] for k in active_orpha]
-        disease_i = pd.unique(df[df['database_id']==idx2omim[i]]['disease_name'])[0]
-        disease_j = pd.unique(df[df['database_id']==idx2orpha[j]]['disease_name'])[0]
-
-        dico[(i, j)] = {
-        "omim":  {"name": disease_i, "count": len(omim_hpos), "terms": omim_hpos},
-        "orpha": {"name": disease_j, "count": len(orpha_hpos), "terms": orpha_hpos},
-        "commun":set(omim_hpos)&set(orpha_hpos),
-        }
-    return dico 
-
-
-def find_lca(u, v, ancestors, depths):
-    """Trouve le plus proche ancêtre commun entre deux noeuds"""
-    if u==v:
-        return u, depths[u]
-    parents_u = ancestors[u]
-    parents_v = ancestors[v]
-    parents = set(parents_u) & set(parents_v)
-    if not parents:
-        return None, 0  # -np.inf ?
-    lca = max(parents, key=lambda n: depths[n])
-    return lca, depths[lca]
-
-
-def shortest_path(d1, d2, depths, ancestors):
-    '''
-    Entrées :
-        - d1, d2 : maladies sous la forme de liste de leurs termes HPO actifs.
-        - depths : dictionnaire des profondeurs.
-        - ancestors : dictionnaire des ancêtres.
-    Sortie :
-        - Plus court chemin moyen des termes de d1 aux termes de d2.
-    Attention, shortest_path(d1, d2)
-    '''
-    dists=[]
-    for t in d1:
-        d_t = depths[t]
-        for s in d2:
-            _, d_lca = find_lca(t, s, ancestors, depths)
-            dists.append(d_t + depths[s] - 2*d_lca)
-    return np.mean(dists)

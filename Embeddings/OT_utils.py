@@ -6,6 +6,7 @@ from scipy.sparse import csgraph
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from numpy.linalg import norm
 from scipy import sparse
 from ot import sinkhorn
 from ot.optim import gcg
@@ -21,12 +22,12 @@ from poincare import PoincareManifold
 #===========================================================================================
 
 
-def compute_cost_matrix(omim, orpha):
+def compute_cost_matrix(omim, orpha, colname='barycenter'):
     """ 
     Distance de Poincaré entre barycentres.
     """
-    omim_bary = torch.tensor(np.stack(omim['barycenter'].values),  dtype=torch.float32)
-    orpha_bary = torch.tensor(np.stack(orpha['barycenter'].values), dtype=torch.float32)
+    omim_bary = torch.tensor(np.stack(omim[colname].values),  dtype=torch.float32)
+    orpha_bary = torch.tensor(np.stack(orpha[colname].values), dtype=torch.float32)
 
     n, m = omim_bary.shape[0], orpha_bary.shape[0]
 
@@ -446,6 +447,7 @@ def compute_unbalanced(C: np.ndarray,
 
     return optimal_plan_sinkhorn, optimal_cost_sinkhorn
 
+
 #===========================================================================================
 #============================== Evaluation des résultats ===================================
 #===========================================================================================
@@ -604,16 +606,43 @@ def evaluate_transport_proba(P, gt_set, seuil):
         return precision, recall
 
 
-def plot_consistency(ax, reg_strengths, plan_diff, distance_diff):
+def plot_consistency(ax, reg_strengths, plan_diff, distance_diff, alpha):
     ax[0].loglog(reg_strengths, plan_diff, lw=4)
     ax[0].set_ylabel('$||P^* - P_\epsilon^*||_F$', fontsize=25)
     ax[1].tick_params(which='both', size=20)
     ax[0].grid(ls='--')
     ax[1].loglog(reg_strengths, distance_diff, lw=4)
+    ax[1].axhline(alpha, color='red', linestyle='--', linewidth=1.5, label='5% seuil')
+    ax[1].legend()
     ax[1].set_xlabel('Regularization Strength $\epsilon$', fontsize=25)
     ax[1].set_ylabel(r'$ 100 \cdot \frac{\langle C, P^*_\epsilon \rangle - \langle C, P^* \rangle}{\langle C, P^* \rangle} $', fontsize=25)
     ax[1].tick_params(which='both', size=20)
     ax[1].grid(ls='--') 
+
+
+def plot_regularization(C, grid, alpha=5, a=None, b=None):
+    plan_diff = []
+    distance_diff = []
+    ot_plan_sinkhorn, ot_cost_sinkhorn = compute_transport(C, a, b)
+
+    for epsilon_prime in grid:
+        epsilon = epsilon_prime * np.mean(C)
+        ot_plan_sinkhorn_croissant, ot_cost_sinkhorn_croissant = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
+
+        assert ot_cost_sinkhorn_croissant != np.nan, (
+            "Optimal cost is nan due to numerical instabilities."
+            )
+        p = norm(ot_plan_sinkhorn_croissant - ot_plan_sinkhorn)
+        plan_diff.append(p)
+        dist = 100 * (ot_cost_sinkhorn_croissant - ot_cost_sinkhorn)/ot_cost_sinkhorn
+        distance_diff.append(dist)
+
+    fig, ax = plt.subplots(2, 1, figsize=(16, 5*2))
+    reg_strengths = np.mean(C) * grid
+    plot_consistency(ax, reg_strengths, plan_diff, distance_diff, alpha)
+
+    plt.tight_layout()
+    plt.show()
 
 #===========================================================================================
 #============================== Régularisation laplacienne =================================

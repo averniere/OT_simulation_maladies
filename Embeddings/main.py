@@ -30,16 +30,18 @@ from OT_utils import *
 #print(f"{len(edges_omim)} arêtes et {len(objects_omim)} noeuds")
 
 # --------------------------------------------------------------------------------------------
-G_hpo_work0 = G_hpo_work.reverse()
-objects = list(G_hpo_work0.nodes())
+# On travaille sur le graphe enfant --> parent(s) : c'est le cas où l'on parvient à avoir la
+# racine au centre du disque de Poincaré.
+
+objects = list(G_hpo_work.nodes())
 node2id = {n: i for i, n in enumerate(objects)}
-edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work0.edges()],dtype=np.int32)
+edges = np.array([(node2id[u], node2id[v]) for u, v in G_hpo_work.edges()],dtype=np.int32)
 print(f"{len(edges)} arêtes et {len(objects)} noeuds")
 
 # Voisins dans le graphe raccordé
 pos_neighbors = [set() for _ in range(len(objects))]
 for u, v in edges:
-    pos_neighbors[int(v)].add(int(u))
+    pos_neighbors[int(u)].add(int(v))
 
 all_u_pos = []
 all_v_pos = []
@@ -75,7 +77,7 @@ def partial_transitive_closure(edges, max_depth=3):
 
 DIM = 15
 EPOCHS = 1500
-LR0 = 0.4
+LR0 = 0.2
 BURN_IN = 100
 NNEGS = 100
 BATCH_SIZE = 256

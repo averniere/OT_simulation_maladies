@@ -2,6 +2,7 @@ import pandas as pd
 import networkx as nx
 import requests, xml.etree.ElementTree as ET
 import urllib.request
+import ast
 import re
 import gc
 
@@ -12,30 +13,13 @@ def mem():
     return psutil.Process(os.getpid()).memory_info().rss / 1e9
 
 
-hp_ids = []
-parents_list = []
-
-with open("../data/HPOs.csv", "r") as f:
-    next(f)
-    for line in f:
-        hp_id = line.split(';')[0]
-        
-        # Extraire uniquement la liste contenant des IDs HP:XXXXXXX
-        match = re.search(r"\[([^\]]*'HP:\d{7}'[^\]]*)\]", line)
-        if match:
-            parents = re.findall(r"HP:\d{7}", match.group(0))
-        else:
-            parents = []
-        
-        hp_ids.append(hp_id)
-        parents_list.append(parents)
-
-df_hpo = pd.DataFrame({'hp_id': hp_ids, 'parents': parents_list})
-
+df_hpo = pd.read_csv('../data/HPOs.csv', sep=";")
+df_hpo['parents'] = df_hpo['parents'].apply(ast.literal_eval)
+df_hpo.head()
 G_hpo_work = nx.DiGraph()
-for hp_id in hp_ids:
+for hp_id in df_hpo['hp_id']:
     G_hpo_work.add_node(hp_id)
-for hp_id, parents in zip(hp_ids, parents_list):
+for hp_id, parents in zip(df_hpo['hp_id'], df_hpo['parents']):
     for parent_id in parents:
         if parent_id in G_hpo_work:
             G_hpo_work.add_edge(hp_id, parent_id)

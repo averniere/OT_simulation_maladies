@@ -62,7 +62,7 @@ def train(
                 desc=f"Epoch {epoch+1}/{epochs}"
                 )
         # tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
-        lambda_pos = min(0.02 * (epoch / 10), 0.3)
+        # lambda_pos = min(0.02 * (epoch / 10), 0.3)
         for i_batch, (inputs, pos_lists) in enumerate(loader):
             # inputs : LongTensor (B, 2+nnegs)
             # target : index de la paire positive = 0 pour chaque ligne
@@ -76,6 +76,7 @@ def train(
             u = preds[:, 0, :]   # (B, dim)
             others = preds[:, 1:, :]  # (B, v+nnegs, dim)
             u_exp = u.unsqueeze(1).expand_as(others)
+
             # Distance de Poincaré de u à v, n_negs
             scores = model.manifold.distance(u_exp, others, model.c)
             
@@ -89,7 +90,7 @@ def train(
                 d_pos = model.manifold.distance(z_u, z_pos, model.c)
                 ce_pos = -F.logsigmoid(-d_pos).mean()
     
-            loss = model.loss(scores, targets) #+ lambda_pos*ce_pos
+            loss = model.loss(scores, targets) # + lambda_pos*ce_pos
             loss.backward()
 
             optimizer.step(lr=current_lr)
@@ -136,17 +137,6 @@ def train(
                 if verbose:
                     print(f"\nEarly stopping déclenché à l'epoch {epoch+1} (meilleure loss: {best_loss:.4f} à l'epoch {best_epoch})")
                 break
-
-        # if save_dir is not None and save_every and (epoch + 1) % save_every == 0:
-            # ckpt_path = os.path.join(save_dir, f"checkpoint_epoch_{epoch+1}.pt")
-            # torch.save({
-                # 'epoch': epoch + 1,
-                # 'model_state_dict': model.state_dict(),
-                # 'losses': losses,
-                # 'norm_history': norm_history,
-            # }, ckpt_path)
-            # if verbose:
-                # print(f"Checkpoint sauvegardé : {ckpt_path}")
 
     # Diagnostic 2
     w_final = model.weight.detach()

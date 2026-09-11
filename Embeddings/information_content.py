@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+import networkx as nx
 from collections import defaultdict
 from tqdm import tqdm
 
@@ -113,3 +115,49 @@ def resnik_similarity(df, G_hpo, ic, deprecated=deprecated):
     return sim
 
 
+def inspect_weights(weights, disease, all_disease, G_hpo, top_n=5):
+    '''
+    Entrées :
+        - weights : l'information content.
+        - disease, all_disease : deux dernières sorties de compute_information_content.
+        - G_hpo : le graphe utilisé, construit dans le sens enfant -> parent.
+    Sortie :
+        - Dataframe qui renseigne pour chaque terme HPO, son IC et ses caractéristiques dans le 
+        graphe (profondeur, nombre de parents, d'enfants). n_disease indique les maladies dans
+        lesquelles les termes apparaissent directement et all_diseases les maladies dans lesquelles
+        ils apparaissent après remontée ancestrale.
+    '''
+    roots = [n for n in G_hpo.nodes if G_hpo.out_degree(n) == 0]
+    root = roots[0] if roots else None
+
+    G_inv = G_hpo.reverse()
+    if root:
+        depths = nx.single_source_shortest_path_length(G_inv, root)
+    else:
+        depths = {}
+
+    rows = []
+    for term, weight in weights.items():
+        n_ancestors = len(get_ancestors0(G_hpo, term))
+        n_children = G_hpo.in_degree(term)
+        rows.append({
+            'term'       : term,
+            'weight'     : weight,
+            'depth'      : depths.get(term, -1),
+            'n_ancestors': n_ancestors,
+            'n_children' : n_children,
+            'n_diseases' : len(disease.get(term, set())) if term in disease else 0,
+            'n_diseases tot':len(all_disease.get(term, set())) if term in all_disease else 0
+        })
+
+    df = (pd.DataFrame(rows)
+            .sort_values('weight', ascending=False)
+            .reset_index(drop=True))
+
+    df.index += 1
+    df['weight'] = df['weight'].map('{:.6f}'.format)
+
+    print(f"Racine détectée : {root}")
+    print(f"Termes : {len(weights)}\n")
+    print(df.tail(top_n).to_string())
+    return df
