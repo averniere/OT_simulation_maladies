@@ -97,13 +97,13 @@ def compute_all_distances(emb_i, all_emb_j):
     """
     # Concaténer tous les embeddings j
     sizes_j = [len(e) for e in all_emb_j]
-    E_all_j = np.concatenate(all_emb_j, axis=0)  # (sum_kj, d)
+    E_all_j = np.concatenate(all_emb_j, axis=0)
     
-    Ei = torch.tensor(emb_i, dtype=torch.float32).unsqueeze(1)       # (ki, 1, d)
-    Ej = torch.tensor(E_all_j, dtype=torch.float32).unsqueeze(0)     # (1, sum_kj, d)
+    Ei = torch.tensor(emb_i, dtype=torch.float32).unsqueeze(1)
+    Ej = torch.tensor(E_all_j, dtype=torch.float32).unsqueeze(0)
     
     manifold = PoincareManifold()
-    dists = manifold.distance(Ei, Ej, c=1).detach().numpy()          # (ki, sum_kj)
+    dists = manifold.distance(Ei, Ej, c=1).detach().numpy()
     
     # Découper selon les tailles
     matrices = []
@@ -114,7 +114,15 @@ def compute_all_distances(emb_i, all_emb_j):
     return matrices
 
 
-def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, deprecated, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+def compute_costs_matrix_wasserstein2(
+    df_omim, 
+    df_orpha, 
+    node2id_w, 
+    model, 
+    deprecated, 
+    unbalanced=False,
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ):
     n = len(df_omim)
     m = len(df_orpha)
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
@@ -159,7 +167,7 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
     idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
     idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
 
-    C = np.zeros((n,m))
+    C = np.zeros((n, m))
 
     print("Precomputing full HPO distance matrix...")
     K = E.shape[0]
@@ -200,7 +208,11 @@ def compute_costs_matrix_wasserstein2(df_omim, df_orpha, node2id_w, model, depre
             M_ij = D_full[np.ix_(idx_i[i], idx_j[j])]
             #M_mean = np.mean(M_ij)
             #reg = 0.1*M_mean
-            _, row[j] = compute_transport(M_ij, weights_i[i], weights_j[j])
+            if unbalanced:
+                eps = 0.1*np.mean(M_ij)
+                _, row[j] = compute_unbalanced(M_ij, None, None, eps, 0.9, 0.9)
+            else:
+                _, row[j] = compute_transport(M_ij, weights_i, weights_j)
             #_, a = compute_transport_sinkhorn(M_ij, weights_i[i], weights_j[j], reg)
             #row[j] = a - (b_cache[i]+c_cache[j])/2
         return i, row

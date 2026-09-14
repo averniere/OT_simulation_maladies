@@ -17,7 +17,6 @@ def train(
     device,
     burnin,
     eval_each=50,
-    node2vec=True,  # Echantillonnage des négatifs façon Node2Vec
     progress=False,
     save_dir=None,
     save_every=10,
@@ -53,15 +52,9 @@ def train(
             hard_ratio = 0.5
         current_lr = lr * _lr_multiplier if data.burnin else lr/(1 + 0.001 * (epoch - burnin))
         epoch_loss = []
-        if not node2vec:
-            loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
-        else:
-            loader = tqdm(
-                data.epoch_batches(hyperparams['num_walks'], hyperparams['walk_length']), 
-                total=len(data._active_pairs) // data.batchsize if data._active_pairs is not None else None,
-                desc=f"Epoch {epoch+1}/{epochs}"
-                )
-        # tqdm(data, desc=f"Epoch {epoch+1}/{epochs}") if progress else data
+
+        loader = tqdm(data.__iter__(model=model, hard_ratio=hard_ratio), total=len(data), desc=f"Epoch {epoch+1}/{epochs}") if progress else data.__iter__(model=model, hard_ratio=hard_ratio)
+        
         # lambda_pos = min(0.02 * (epoch / 10), 0.3)
         for i_batch, (inputs, pos_lists) in enumerate(loader):
             # inputs : LongTensor (B, 2+nnegs)
@@ -80,7 +73,7 @@ def train(
             # Distance de Poincaré de u à v, n_negs
             scores = model.manifold.distance(u_exp, others, model.c)
             
-            # Termes positifs
+            # Termes positifs : test modification de la loss
             ce_pos = torch.tensor(0.0, device=device)
             if all_u_pos is not None:
                 n_samples = inputs.size(0) * 4
@@ -142,7 +135,7 @@ def train(
     w_final = model.weight.detach()
     delta = (w_final - w_init).norm(dim=-1)
     print(f"\nDéplacement moyen des embeddings : {delta.mean():.4f}")
-    print(f"Déplacement max                  : {delta.max():.4f}")
+    print(f"Déplacement max : {delta.max():.4f}")
     print(f"Embeddings non bougés (delta<1e-4): {(delta < 1e-4).sum().item()}")
 
     if save_dir is not None:

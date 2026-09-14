@@ -84,10 +84,6 @@ BATCH_SIZE = 256
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(DEVICE)
 POS_RATIO = 0  # Pourcentage de pseudo-positifs tirés en plus
-P = 1.0
-Q = 0.05
-WINDOW_SIZE = 10
-REFRESH = 50   # Ré-échantillonnage des positifs tous les ...
 
 LR = LR0/32*BATCH_SIZE
 print(LR)
@@ -158,7 +154,6 @@ losses, norms = train(
     epochs=EPOCHS,
     lr=LR,
     device=DEVICE,
-    node2vec=False,
     burnin=BURN_IN,
     save_dir=save_dir,
     objects=objects,
@@ -170,12 +165,10 @@ losses, norms = train(
         'lr': LR,
         'burnin': BURN_IN,
         'n_neg': NNEGS,
-        'num_walks': 10,
-        'walk_length': 5,
     },
     patience=50,
     early_stop=0.001,
     c_optimizer=c_optimizer, 
-    all_u_pos=all_u_pos,
-    all_v_pos=all_v_pos
+    all_u_pos=None,  # all_u_pos,
+    all_v_pos=None,  # all_v_pos
 )
