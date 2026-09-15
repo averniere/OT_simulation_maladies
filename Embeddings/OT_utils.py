@@ -656,88 +656,6 @@ def plot_regularization(C, grid, alpha=5, a=None, b=None):
     plt.tight_layout()
     plt.show()
 
-#===========================================================================================
-#============================== Régularisation laplacienne =================================
-#===========================================================================================
-
-
-def simi_ppi(df):
-    '''
-    Construction d'une matrice de similarités à partir des interactions protéine-protéine.
-    '''
-    n = df.shape[0]
-    protein_to_idx = defaultdict(list)
-    for i, row in df.iterrows():
-        proteins = row['protein'] if isinstance(row['protein'], list) else [row['protein']]
-        for p in proteins:
-            if pd.notna(p):
-                protein_to_idx[p].append(i)
-
-    S = np.zeros((n, n))
-    for i, row in df.iterrows():
-        interactions = list(row['protein2'])
-        for p in interactions:
-            list_j = protein_to_idx.get(p)
-            if list_j is not None:
-                for j in list_j:
-                    if i!=j:
-                        S[i, j] = 1
-                        S[j, i] = 1
-    return S
-
-
-def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=500, stopThr=1e-9, numInnerItermax=100000,stopInnerThr=1e-9, log=False, verbose=False):
-    """
-    Inputs :
-        - a, b : pondérations de l'information des points sources et destinations à transporter.
-        - xs : données sources.
-        - xt : données destinations.
-        - M : matrice de coûts.
-        - S : matrice de similarité.
-        - epsilon : régularisation entropique.
-        - eta : deuxième régularisation (laplacienne)
-    """
-    n, m = M.shape
-    if a==None:
-        a = np.ones(n)/n
-    if b==None:
-        b = np.ones(m)/m
-
-    #Convertir les entrées en tableaux numpy
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    xs = np.asarray(xs, dtype=np.float64)  # pas forcément utilisé ici
-    xt = np.asarray(xt, dtype=np.float64)  # pas forcément utilisé ici
-    M = np.asarray(M, dtype=np.float64)
-    S = np.asarray(S, dtype=np.float64)
-
-    # Calcul du Laplacien (non normé) à partir de la matrice de similarité S
-    lS = csgraph.laplacian(S, normed=False)
-    lS_sym = 0.5 * (lS + lS.T)  # on le symétrise pour éviter tout problème numérique
-
-    def f(G):
-        """
-        Calcule la partie "Laplacien" du coût
-        sans multiplier par reg2 (le GCG s'en charge).
-        """
-        # Terme Laplacien
-        val_lap = (lS_sym@G)*G
-        # si on considere similarité dans la cible egalement avec un param alphe ici = 0.5
-        # val_lap = 0.5 * np.trace(G.T.dot(lS2).dot(G)) + 0.5 * np.trace(G.dot(lc2).dot(G.T))
-        return val_lap.sum()
-
-    def df(G):
-        """
-        Gradient de f_lap(G).
-        """
-        #si on considere similarité dans la cible egalement avec un param alphe ici = 0.5
-        #return (ls2 @ G) + (G @ Lc2)
-        # Gradient partie laplacienne  2 *  (ls2 @ G)
-        return  2 * (lS_sym @ G)
-
-    # Résolution du problème d'optimisation avec l'algorithme du gcg
-    return gcg(a, b, M, reg1=epsilon, reg2=eta, f=f, df=df, G0=None, numItermax=numItermax, numItermaxEmd=numInnerItermax, stopThr=stopThr, stopThr2=stopInnerThr,verbose=verbose)
-
 
 def plot_unbalanced(taus, C, epsilon, gt_set):
     '''
@@ -791,6 +709,7 @@ def plot_unbalanced(taus, C, epsilon, gt_set):
     plt.tight_layout()
     plt.show()
 
+
 def plot_PR_curve(P, gt_set, seuils):
     '''
     Courbe précision-rappel calculée sur le plan de transport, à partir de la probabilité
@@ -817,3 +736,176 @@ def plot_PR_curve(P, gt_set, seuils):
     ax.set_title('Courbe précision-rappel')
     plt.tight_layout()
     plt.plot()
+
+#===========================================================================================
+#============================== Régularisation laplacienne =================================
+#===========================================================================================
+
+
+def simi_ppi(df, m_to_idx):
+    '''
+    Entrées : 
+        - Dataframe récapitulant les données sur les maladies, associations de gènes et PPI.
+        - m_to_idx : dictionnaire {maladie: index} du dataframe à partir duquel on calculera
+        le plan de transport (garde-fou).
+    '''
+    n = df.shape[0]
+    protein_to_idx = defaultdict(list)
+    for i, row in df.iterrows():
+        proteins = row['protein'] if isinstance(row['protein'], list) else [row['protein']]
+        for p in proteins:
+            if pd.notna(p):
+                protein_to_idx[p].append(row['disease_id'])
+
+    S = np.zeros((n, n))
+    for i, row in df.iterrows():
+        m_i = row['database_id']
+        ind_i = m_to_idx[m_i]
+        interactions = list(row['protein2'])
+        scores = row['combined_score'] if isinstance(row['combined_score'], list) else []
+        for p, val in zip(interactions, scores):
+            if pd.isna(p) or pd.isna(val):
+                continue
+            for m_j in protein_to_idx.get(p, []):
+                ind_j = m_to_idx[m_j]
+                S[ind_i, ind_j] = max(val/1000, 0)
+                S[ind_j, ind_i] = max(val/1000, 0)
+    np.fill_diagonal(S, 1.)
+    return S
+
+
+def laplacian(x):
+    r"""Compute Laplacian matrix"""
+    L = np.diag(np.sum(x, axis=1)) - x
+    return L
+
+def otda(
+    a, b, 
+    df_source, df_target, 
+    C, 
+    Ss, St,
+    epsilon,
+    eta=1., 
+    alpha=0.5, 
+    reg="pos", 
+    numItermax=1000,
+    stopThr=1e-9,
+    numInnerItermax=10_000,
+    stopInnerThr=1e-9,
+    log=False,
+    verbose=False
+    ):
+    '''
+    Reprend et adapte le code de la fonction emd_laplace de la dépendance ot.da du package POT.
+    cf : https://github.com/PythonOT/POT/blob/master/ot/da.py 
+    '''
+
+    n, m = C.shape
+    if a is None:
+        a = np.ones(n)/n
+    if b is None:
+        b = np.ones(m)/m
+
+    hpo_cols = [c for c in df_source.columns if c.startswith('HP')]
+    xs = np.asarray(df_source[hpo_cols], dtype=np.float32)
+    xt = np.asarray(df_target[hpo_cols], dtype=np.float32)
+
+    lS = laplacian(Ss)
+    lT = laplacian(St)
+
+    ls2 = lS + lS.T
+    lt2 = lT + lT.T
+    xt2 = np.dot(xt, xt.T)
+    xs2 = np.dot(xs, xs.T)
+
+    def f(G):
+        #return alpha * np.trace(G.T @ lS @ G) + (1 - alpha) * np.trace(G @ lT @ G.T)
+        return alpha * np.trace(xt.T @ G.T @ lS @ G @ xt) + (1 - alpha) * np.trace(xs.T @ G @ lT @ G.T @ xs)
+
+    def df(G):
+        #return alpha * (ls2 @ G) + (1-alpha) * (G @ lt2)
+        return alpha * (ls2 @ G @ xt2) + (1 - alpha) * (xs2 @ G @ lt2)
+
+    assert (C >= 0).all(), "C contient des valeurs négatives !"
+    G_emd = ot.sinkhorn(a, b, C, reg=epsilon*np.mean(C), numItermax=10_000)
+    print("G0 nan:", np.isnan(G_emd).any())
+    G0Xt = G_emd @ xt
+    term1 = np.einsum('ij,ij->', lS @ G0Xt, G0Xt)
+    G0tXs = G_emd.T @ xs
+    term2 = np.einsum('ij,ij->', lT @ G0tXs, G0tXs)
+    f_Gemd = alpha * term1 + (1 - alpha) * term2
+
+    print("Omega_c:", f_Gemd) 
+    print("Sinkhorn :", np.sum(G_emd * C))
+    print("Coefficient multiplicateur :", np.sum(G_emd * C) / f_Gemd)
+    eta_calibrated = np.sum(G_emd*C)/f_Gemd
+    return ot.optim.gcg(
+        a,
+        b,
+        C,
+        reg1=eta,
+        reg2=epsilon,
+        f=f,
+        df=df,
+        G0=None,
+        numItermax=100, 
+        numInnerItermax=100_000, 
+        stopThr=1e-09, 
+        stopThr2=1e-09, 
+        verbose=verbose
+    )
+
+
+def plot_laplace(etas, C, regs, Ss, St, gt_set, alpha):
+    '''
+    Entrées :
+        - etas : liste des eta à tester.
+        - C : matrice de coût.
+        - regs : liste des epsilon à tester.
+        - Ss, St : matrices de similarité source et destination.
+        - gt_set : vérité de terrain.
+        - alpha : paramètre alpha dans la régularisation laplacienne.
+    Représente l'évolution des résultats en fonction de eta.
+    '''
+    res = {eps:{'Top 1':[], 'Top 3':[]} for eps in regs}
+    for eps in tqdm(res.keys()):
+        epsilon0 = eps * np.mean(C)
+        for eta in etas:
+            ot_lapl = otda(None, None,  # a, b
+            omim_test, orpha_test, 
+            C, 
+            Ss, St,
+            epsilon0, 
+            eta, 
+            alpha)
+
+            print("Transport computed !")
+            _, _, _, _, both = evaluate_transport(ot_lapl, gt_set_test, C, verbose=False)
+            res[eps]['Top 1'].append(both[1]/len(gt_set))
+            res[eps]['Top 3'].append(both[3]/len(gt_set))
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(5, 5))
+    palette = sns.color_palette(n_colors=len(regs) * 2)
+    color_idx = 0
+    for eps in regs:
+        markers = ['o', 'X']
+        marker_idx = 0
+        for metric in ['Top 1', 'Top 3']:
+            sns.lineplot(
+                x=etas, 
+                y=res[eps][metric], 
+                marker=markers[marker_idx], 
+                label=f'{eps} - {metric}',
+                color=palette[color_idx],
+                ax=ax,
+            )
+            marker_idx += 1
+        color_idx += 1
+    ax.set_xlabel(r'$\tau$')
+    ax.set_xscale('log')
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Max Top 1 = {round(np.max([np.max(res[eps]['Top 1']) for eps in res]), 2)}, Top 3 = {round(np.max([np.max(res[eps]['Top 3']) for eps in res]), 2)}")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.show()
