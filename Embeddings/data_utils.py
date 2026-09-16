@@ -311,8 +311,8 @@ def compare_barycenters(df, colname1, colname2, model, node2id, deprecated, weig
 def save_method(dict_method, method_name, savedir=Path("../data/utils")):
     savedir.mkdir(parents=True, exist_ok=True)
     entry = dict_method[method_name]  # dict de tableaux
-    path = SAVE_DIR / f"{method_name}.npz"
-    fd, tmp_path = tempfile.mkstemp(dir=SAVE_DIR, suffix=".npz")
+    path = savedir / f"{method_name}.npz"
+    fd, tmp_path = tempfile.mkstemp(dir=savedir, suffix=".npz")
     os.close(fd)
     np.savez_compressed(tmp_path, **entry)
     os.replace(tmp_path, path)

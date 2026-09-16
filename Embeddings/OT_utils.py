@@ -212,7 +212,7 @@ def compute_costs_matrix_wasserstein2(
                 eps = 0.1*np.mean(M_ij)
                 _, row[j] = compute_unbalanced(M_ij, None, None, eps, 0.9, 0.9)
             else:
-                _, row[j] = compute_transport(M_ij, weights_i, weights_j)
+                _, row[j] = compute_transport(M_ij, weights_i[i], weights_j[j])
             #_, a = compute_transport_sinkhorn(M_ij, weights_i[i], weights_j[j], reg)
             #row[j] = a - (b_cache[i]+c_cache[j])/2
         return i, row

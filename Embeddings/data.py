@@ -30,6 +30,23 @@ node2id_w = {n: i for i, n in enumerate(objects_w)}
 root = "HP:0000001"
 depths = nx.single_source_shortest_path_length(G_hpo_work.reverse(), source=root)
 
+# Les sept sous-ontologies
+inheritance = nx.ancestors(G_hpo_work, 'HP:0000005')
+onset = nx.ancestors(G_hpo_work, 'HP:0012823')
+abnormality = nx.ancestors(G_hpo_work, 'HP:0000118')
+history = nx.ancestors(G_hpo_work, 'HP:0032443')
+biospecimen = nx.ancestors(G_hpo_work, 'HP:0020228')
+blood = nx.ancestors(G_hpo_work, 'HP:0032223')
+frequency = nx.ancestors(G_hpo_work, 'HP:0040279')
+categories = {
+    'inheritance': list(inheritance), 
+    'onset' : list(onset), 
+    'abnormality' : list(abnormality), 
+    'history' : list(history), 
+    'biospecimen' : list(biospecimen),
+    'blood' : list(blood), 
+    'frequency' : list(frequency)}
+
 
 def read_hpoa(path, usecols=None, dtype=None):
     with open(path, 'r') as f:

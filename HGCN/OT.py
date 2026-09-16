@@ -10,6 +10,137 @@ from tqdm import tqdm
 from collections import defaultdict
 
 
+# ===========================================================================================
+# ============================= Fonctions générales, utiles =================================
+# ===========================================================================================
+
+def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
+    omim_to_idx = {v: i for i, v in enumerate(work_omim['database_id'].values)} 
+    orpha_to_idx = {v: i for i, v in enumerate(work_orpha['database_id'].values)}
+
+    ground_truth = []
+    valid_omim = []
+    valid_orpha = []
+    for _, row in df_orpha_omim.iterrows():
+        if row['omim_id'] in omim_to_idx and row['orpha_id'] in orpha_to_idx:
+            i = omim_to_idx[row['omim_id']]
+            j = orpha_to_idx[row['orpha_id']]
+            ground_truth.append((i, j))
+            valid_omim.append(row['omim_id'])
+            valid_orpha.append(row['orpha_id'])
+    gt_set = set(ground_truth)
+    return gt_set, valid_omim, valid_orpha
+
+
+def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
+    '''
+    Entrées :
+        - df_omim : dataset de maladies annotées,
+        - G_hpo : graphe de l'ontologie HPO,
+        - deprecated : liste de termes apparaissant dans les maladies et mis à jour depuis.
+    Sortie :
+        - Dictionnaire qui associe à chaque terme HPO apparaissant dans au moins une maladie la 
+        valeur de l'IC.
+        - diseases : dictionnaire {terme HPO : liste des maladies qui le contiennent}
+        - all_diseases : dictionnaire {terme HPO : maladies qui le contiennent avec propagation ancestrale}
+    NB : On pondère sur l'ensemble des noeuds du graphe, pas juste sur les maladies. Du point de vue
+    de l'interprétation c'est moins élégant, car on n'a pas de probabilité d'apparition dans une maladie,
+    mais au niveau des résultats c'est un peu mieux. 
+    '''
+    colnames = [c for c in df_omim.columns if c.startswith('HP:')]
+    hp_matrix = df_omim[colnames].values
+    ids = df_omim.index.tolist()
+
+    weights = defaultdict(float)
+    diseases = defaultdict(set)
+    all_diseases = defaultdict(set)
+    ancestors = {}
+
+    def get_ancestors(term):
+        if term not in ancestors:
+            ancestors[term] = data.get_ancestors0(G_hpo, term)
+        return ancestors[term]
+
+    row_idxs, col_idxs = np.where(hp_matrix > 0)
+    for row_idx, col_idx in zip(row_idxs, col_idxs):
+        disease_id = ids[row_idx]
+        term = colnames[col_idx]  # terme HPO
+        resolved = deprecated.get(term, term)
+        
+        weights[resolved] += hp_matrix[row_idx, col_idx]  #1
+        diseases[resolved].add(disease_id)
+        all_diseases[resolved].add(disease_id)
+        
+        for ancestor in get_ancestors(resolved):
+            weights[ancestor] += hp_matrix[row_idx, col_idx]  #1
+            all_diseases[ancestor].add(disease_id)
+
+    total = sum(weights.values())
+    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+
+
+# ===========================================================================================
+# ================================== Matrices de coût =======================================
+# ===========================================================================================
+
+def compute_cost_matrix(omim, orpha, manifold, colname='barycenter'):
+    """ 
+    Distance de Poincaré entre barycentres.
+    """
+    omim_bary = torch.tensor(np.stack(omim[colname].values),  dtype=torch.float32)
+    orpha_bary = torch.tensor(np.stack(orpha[colname].values), dtype=torch.float32)
+
+    n, m = omim_bary.shape[0], orpha_bary.shape[0]
+
+    u = omim_bary.unsqueeze(1).expand(n, m, -1).reshape(n * m, -1)
+    v = orpha_bary.unsqueeze(0).expand(n, m, -1).reshape(n * m, -1)
+
+    dists = manifold.distance(u, v, c=1)  # (n*m,)
+
+    return dists.reshape(n, m).numpy()
+
+
+def emb_norms(df_omim, df_orpha, node2id_w, model, manifold=PoincareManifold()):
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+    all_hpo = list(hpo_cols)
+    model.eval()
+    W = model.weight.detach().cpu().numpy()
+    indices = [node2id_w[hpo] for hpo in all_hpo if hpo in node2id_w]
+    known_pos = [i for i, hpo in enumerate(all_hpo) if hpo in node2id_w]
+    W_known = torch.tensor(W[indices], dtype=torch.float32)
+    origin = torch.zeros_like(W_known)
+    with torch.no_grad():
+        hyp_norms = manifold.distance(W_known, origin, c=1.).cpu().numpy()
+    norms = np.zeros(len(all_hpo))
+    norms[known_pos] = hyp_norms
+
+    return norms, all_hpo
+
+
+def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_size=256):
+    """Hamming en pondérant par les embeddings."""
+    n = df_omim.shape[0]
+    m = df_orpha.shape[0]
+    C = np.zeros((n, m))
+    print("Compute norms")
+    norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, model)
+    print("Norms computed !")
+    
+    A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(np.float32)
+    B = df_orpha.reindex(columns=all_hpo,  fill_value=0)[all_hpo].values.astype(np.float32)
+
+    Aw = A * norms
+    Bw = B * norms
+
+    C = Aw.sum(axis=1)[:, None] + Bw.sum(axis=1)[None, :] - 2 * (A @ Bw.T)
+    # Check
+    #for i, j in [(0, 0), (3, 7), (9, 14)]:
+        #ref = np.dot(np.abs(A[i, :] - B[j, :]), norms)
+        #new = C[i, j]
+        #print(f"C[{i},{j}]  ref={ref:.6f}  new={new:.6f}  diff={abs(ref-new):.2e}")
+    return C
+
+
 def compute_costs_matrix_wasserstein2(
     df_omim, df_orpha, 
     node2id_w, 
@@ -106,227 +237,6 @@ def compute_costs_matrix_wasserstein2(
     for i, row in results:
         C[i] = row 
     return C
-
-    
-def compute_transport(
-    C: np.ndarray,
-    a: np.ndarray,
-    b: np.ndarray):
-    n = C.shape[0]
-    m = C.shape[1]
-    if a is None:
-        a = np.ones(n)/n
-    if b is None:
-        b = np.ones(m)/m
-    optimal_plan = ot.emd(a, b, C, numItermax=10e6)
-    optimal_cost = np.sum(optimal_plan*C)
-    return optimal_plan, optimal_cost
-
-
-def compute_transport_sinkhorn(
-    C: np.ndarray,
-    a: np.ndarray,
-    b: np.ndarray,
-    epsilon: float,
-    max_iters: int = 100000,
-    tau: float = 1e-4,
-    verbose: bool = False,
-    ):
-    n = C.shape[0]
-    m = C.shape[1]
-    if a is None:
-        a = np.ones(n)/n
-    if b is None:
-        b = np.ones(m)/m
-    assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
-    assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
-    optimal_plan_sinkhorn = ot.sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
-    optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
-
-    if verbose:
-        print(f"entropic optimal transport plan: \n{optimal_plan_sinkhorn}")
-        print(f"entropic transport cost: {optimal_cost_sinkhorn}")
-
-    return optimal_plan_sinkhorn, optimal_cost_sinkhorn
-
-
-def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5)):
-    """
-    Évalue le plan de transport P contre la vérité terrain.
-    Inputs : 
-        - P : plan de transport ;
-        - gt_set : correspondances exactes entre les maladies des deux bases de données sous la forme
-        {(i_1,j_1), (i_2, j_2)...} ;
-        - C : matrice de coût ;
-        - top_k : précision, j_true est au plus la k-ième destination recevant le plus de masse.
-    """
-    results = {k: 0 for k in top_k}
-    pairs = {}
-    ranks = []
-    marginal = np.sum(P, axis=1)
-
-    for (i, j_true) in gt_set:
-        # Colonnes triées par masse décroissante pour la ligne i
-        ranked_cols = np.argsort(P[i])[::-1]
-        rank = np.where(ranked_cols == j_true)[0]
-        if len(rank) == 0:
-            continue
-        rank = rank[0] + 1
-        ranks.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
-        
-        for k in top_k:
-            if rank <= k:
-                results[k] += 1
-                if C is not None and (i, j_true) not in pairs.keys():
-                    pairs[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal[i]]
-                    
-        if C is not None and (i, j_true) not in pairs.keys():
-            pairs[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal[i]]
-            
-    n = len(gt_set)
-    print(f"Paires évaluées : {n}")
-    for k in top_k:
-        print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
-    print(f" Rang moyen: {np.mean(ranks):.2f}")
-
-    return ranks, pairs
-
-
-def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
-    omim_to_idx = {v: i for i, v in enumerate(work_omim['database_id'].values)} 
-    orpha_to_idx = {v: i for i, v in enumerate(work_orpha['database_id'].values)}
-
-    ground_truth = []
-    valid_omim = []
-    valid_orpha = []
-    for _, row in df_orpha_omim.iterrows():
-        if row['omim_id'] in omim_to_idx and row['orpha_id'] in orpha_to_idx:
-            i = omim_to_idx[row['omim_id']]
-            j = orpha_to_idx[row['orpha_id']]
-            ground_truth.append((i, j))
-            valid_omim.append(row['omim_id'])
-            valid_orpha.append(row['orpha_id'])
-    gt_set = set(ground_truth)
-    return gt_set, valid_omim, valid_orpha
-
-
-def compute_information_content(df_omim, G_hpo, deprecated=data.deprecated):
-    '''
-    Calcul la fréquence d'apparition d'un term dans une maladie.
-    Pour avoir l'IC il faut appliquer une fonction décroissante, typiquement -log.
-    '''
-    colnames = [c for c in df_omim.columns if c.startswith('HP:')]
-    hp_matrix = df_omim[colnames].values
-    ids = df_omim.index.tolist()
-
-    weights = defaultdict(float)
-    diseases = defaultdict(set)
-    all_diseases = defaultdict(set)
-    ancestors = {}
-
-    def get_ancestors(term):
-        if term not in ancestors:
-            ancestors[term]= data.get_ancestors0(G_hpo, term)
-        return ancestors[term]
-
-    row_idxs, col_idxs = np.where(hp_matrix == 1)
-    for row_idx, col_idx in zip(row_idxs, col_idxs):
-        disease_id = ids[row_idx]
-        term = colnames[col_idx]
-        resolved = deprecated.get(term, term)
-        
-        weights[resolved] += 1
-        diseases[resolved].add(disease_id)
-        all_diseases[resolved].add(disease_id)
-        
-        for ancestor in get_ancestors(resolved):
-            weights[ancestor] += 1
-            all_diseases[ancestor].add(disease_id)
-
-    total = sum(weights.values())
-    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
-
-
-def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manifold, weights=None, c=1.):
-    w_omim = omim.copy()
-    w_orpha = orpha.copy()
-
-    def compute_disease_barycenters(
-        profils_omim, node2id, embeddings, deprecated, weights=None, normalize=False, c=1
-        ):
-        W = torch.from_numpy(embeddings.copy())
-        hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]
-
-        col_meta = {}
-        for col in hpo_cols:
-            resolved = deprecated.get(col, col)
-            if resolved in node2id:
-                w = weights[resolved] if (weights is not None and resolved in weights) else 1.0
-                col_meta[col] = (W[node2id[resolved]], w)  # (Coordonnée, pondération)
-
-        valid_cols = list(col_meta.keys())
-        barycenters = []
-        for _, row in tqdm(profils_omim.iterrows(), total=len(profils_omim), desc="Barycentres"):
-            active = [(col_meta[col][0], col_meta[col][1]) 
-            for col in valid_cols if row[col] == 1]  # Termes actifs
-
-            if len(active) < 1:
-                barycenters.append(None)
-                continue
-
-            points = torch.stack([a[0] for a in active])
-            if weights is None:
-                w = None
-            else:
-                w = torch.tensor([a[1] for a in active], dtype=torch.float32)
-                if normalize:
-                    w = w / w.sum()
-            barycenter = fm.frechet_mean(points, c, w)
-            barycenters.append(barycenter.numpy())
-
-        profils_omim['barycenter'] = barycenters
-        return profils_omim
-    w_omim = compute_disease_barycenters(w_omim, node2id, embeddings, deprecated, weights)
-    w_orpha = compute_disease_barycenters(w_orpha, node2id, embeddings, deprecated, weights)
-
-    omim_bary = torch.tensor(np.stack(w_omim['barycenter'].values),  dtype=torch.float32)
-    orpha_bary = torch.tensor(np.stack(w_orpha['barycenter'].values), dtype=torch.float32)
-
-    n, m = omim_bary.shape[0], orpha_bary.shape[0]
-    u = omim_bary.unsqueeze(1).expand(n, m, -1).reshape(n * m, -1)
-    v = orpha_bary.unsqueeze(0).expand(n, m, -1).reshape(n * m, -1)
-
-    dists = manifold.sqdist(u, v, c=1)  # (n*m,)
-    return dists.reshape(n, m).numpy()
-
-
-def group_by_length(idx_list, weights_list):
-    """Regroupe les indices de disease par taille de support (nb de termes HPO actifs)."""
-    groups = defaultdict(list)
-    for pos, (idx, w) in enumerate(zip(idx_list, weights_list)):
-        if idx:
-            groups[len(idx)].append(pos)
-    stacked = {}
-    for L, positions in groups.items():
-        I = np.array([idx_list[p] for p in positions])
-        W = np.array([weights_list[p] for p in positions])
-        stacked[L] = (np.array(positions), I, W)
-    return stacked
-
-
-def compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, n_iter=200, device="cuda"):
-    Ms = Ms.to(device)
-    As = As.to(device)
-    Bs = Bs.to(device)
-    K = torch.exp(-Ms / epsilon)
-    u = torch.ones_like(As)
-    v = torch.ones_like(Bs)
-    for _ in range(n_iter):
-        u = As / (torch.bmm(K, v.unsqueeze(-1)).squeeze(-1) + 1e-9)
-        v = Bs / (torch.bmm(K.transpose(1, 2), u.unsqueeze(-1)).squeeze(-1) + 1e-9)
-    P = u.unsqueeze(-1) * K * v.unsqueeze(1)
-    cost = (P * Ms).sum(dim=(1, 2))
-    return cost.cpu().numpy()
 
 
 def compute_costs_matrix_wasserstein_batched(
@@ -435,3 +345,285 @@ def compute_costs_matrix_wasserstein_batched(
                     C[np.ix_(rows, pos_j)] = costs
         return C
     return compute_costs_grouped(D_full, idx_i, idx_j, weights_i, weights_j, n, m)
+
+# ===========================================================================================
+# =============================== Méthodes de transport =====================================
+# ===========================================================================================
+
+
+def compute_transport(
+    C: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray):
+    n = C.shape[0]
+    m = C.shape[1]
+    if a is None:
+        a = np.ones(n)/n
+    if b is None:
+        b = np.ones(m)/m
+    optimal_plan = ot.emd(a, b, C, numItermax=10e6)
+    optimal_cost = np.sum(optimal_plan*C)
+    return optimal_plan, optimal_cost
+
+
+def compute_transport_sinkhorn(
+    C: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    epsilon: float,
+    max_iters: int = 100000,
+    tau: float = 1e-4,
+    verbose: bool = False,
+    ):
+    n = C.shape[0]
+    m = C.shape[1]
+    if a is None:
+        a = np.ones(n)/n
+    if b is None:
+        b = np.ones(m)/m
+    assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
+    assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
+    optimal_plan_sinkhorn = ot.sinkhorn(a, b, C, epsilon, numItermax=max_iters, stopThr=tau)
+    optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
+
+    if verbose:
+        print(f"entropic optimal transport plan: \n{optimal_plan_sinkhorn}")
+        print(f"entropic transport cost: {optimal_cost_sinkhorn}")
+
+    return optimal_plan_sinkhorn, optimal_cost_sinkhorn
+
+
+def compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, n_iter=200, device="cuda"):
+    Ms = Ms.to(device)
+    As = As.to(device)
+    Bs = Bs.to(device)
+    K = torch.exp(-Ms / epsilon)
+    u = torch.ones_like(As)
+    v = torch.ones_like(Bs)
+    for _ in range(n_iter):
+        u = As / (torch.bmm(K, v.unsqueeze(-1)).squeeze(-1) + 1e-9)
+        v = Bs / (torch.bmm(K.transpose(1, 2), u.unsqueeze(-1)).squeeze(-1) + 1e-9)
+    P = u.unsqueeze(-1) * K * v.unsqueeze(1)
+    cost = (P * Ms).sum(dim=(1, 2))
+    return cost.cpu().numpy()
+
+
+def compute_unbalanced(C: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    epsilon: float,
+    rega,
+    regb,
+    max_iters: int = 100000,
+    tau: float = 1e-4,
+    verbose: bool = False,
+    log: bool = False):
+    '''
+    Résout le problème de transport avec des contraintes relâchées.
+    Entrées : 
+        - a, b : contraintes de capacités,
+        - epsilon : régularisation entropique, 
+        - rega, regb : définies dans [0,1]. Si égales à 1, alors équivalent au problème de transport
+        classique. Si égales à 0, alors équivalent à un problème sans contraintes de capacités.
+    '''
+    n = C.shape[0]
+    m = C.shape[1]
+    if a is None:
+        a = np.ones(n)/n
+    if b is None:
+        b = np.ones(m)/m
+    assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
+    assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
+    regm = (rega*epsilon/(1-rega) if rega<1 else np.inf, regb*epsilon/(1-regb) if regb<1 else np.inf)
+    optimal_plan_sinkhorn = ot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, epsilon, regm, numItermax=max_iters, stopThr=tau)
+    optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
+
+    if verbose:
+        print(f"entropic optimal transport plan: \n{optimal_plan_sinkhorn}")
+        print(f"entropic transport cost: {optimal_cost_sinkhorn}")
+
+    return optimal_plan_sinkhorn, optimal_cost_sinkhorn
+
+
+#===========================================================================================
+#============================== Evaluation des résultats ===================================
+#===========================================================================================
+
+
+def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
+    """
+    Évalue le plan de transport P contre la vérité terrain.
+    Inputs : 
+        - P : plan de transport ;
+        - gt_set : correspondances exactes entre les maladies des deux bases de données sous la forme
+        {(i_1,j_1), (i_2, j_2)...} ;
+        - C : matrice de coût ;
+        - top_k : précision, j_true est au plus la k-ième destination recevant le plus de masse.
+    """
+    results1 = {k: 0 for k in top_k}  # Bonnes associations par lignes
+    results2 = {k: 0 for k in top_k}  # Bonnes associations par colonnes
+    both = {k : 0 for k in top_k}  # Bonnes associations par ligne et par colonne
+    pairs1 = {}
+    pairs2 = {}
+    ranks_orpha = []
+    ranks_omim = []
+    marginal_a = np.sum(P, axis=1)
+    marginal_b = np.sum(P, axis=0)
+    if exact: 
+        for (i, j_true) in gt_set:
+            # Colonnes triées par masse décroissante pour la ligne i
+            ranked_cols = np.argsort(P[i])[::-1]
+            rank = np.where(ranked_cols == j_true)[0]
+            if len(rank) == 0:
+                continue
+            rank = rank[0] + 1
+            ranks_orpha.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
+
+            # Lignes triées par masse décroissante pour la colonne j_true
+            ranked_lines = np.argsort(P[:,j_true])[::-1]
+            rank2 = np.where(ranked_lines == i)[0]
+            if len(rank2) == 0:
+                continue
+            rank2 = rank2[0] + 1
+            ranks_omim.append(rank2)
+
+            for k in top_k:
+                if rank <= k and rank2 <= k:
+                    results1[k] += 1
+                    results2[k] += 1
+                    both[k] += 1
+                    if C is not None and (i, j_true) not in pairs1.keys():
+                        pairs1[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                    if C is not None and (i, j_true) not in pairs2.keys():
+                        pairs2[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+                elif rank > k or rank2 > k:
+                    if rank <= k:
+                        results1[k] +=1
+                        if C is not None and (i, j_true) not in pairs1.keys():
+                            pairs1[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                        if C is not None and (i, j_true) not in pairs2.keys():
+                            pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+                    elif rank2 <= k:
+                        results2[k] +=1
+                        if C is not None and (i, j_true) not in pairs1.keys():
+                            pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                        if C is not None and (i, j_true) not in pairs2.keys():
+                            pairs2[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+                    else:
+                        if C is not None and (i, j_true) not in pairs1.keys():
+                            pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                        if C is not None and (i, j_true) not in pairs2.keys():
+                            pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+        n = len(gt_set)
+        if verbose:
+            print(f"Paires évaluées : {n}")
+            for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:  # Idéalement, créer un dico méthode --> résultat
+                print(f"=========== {val} ===========")
+                for k in top_k:
+                    if val == "Lignes":
+                        print(f"Top-{k} accuracy : {results1[k]/n:.3f} ({results1[k]}/{n})")
+                    elif val == "Colonnes":
+                        print(f"Top-{k} accuracy : {results2[k]/n:.3f} ({results2[k]}/{n})")
+                    else:
+                        print(f"Top-{k} accuracy : {both[k]/n:.3f} ({both[k]}/{n})")
+            print(f" Rang moyen des maladies Orpha : {np.mean(ranks_orpha):.2f}")
+            print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
+    else:  # Pour le cas où plusieurs maladies peuvent être associées à une même maladie (à modifier)
+        ranks = []
+        pairs = {}
+        results = {k: 0 for k in top_k}
+        marginal = np.sum(P, axis=1)
+        for i in gt_set.keys():
+            ranked_cols = np.argsort(P[i])[::-1]
+            js = gt_set[i]
+            rank_j = []
+            for j in js:
+                rank = np.where(ranked_cols == j)[0]
+                if len(rank) == 0:
+                    continue
+                rank = rank[0] + 1
+                rank_j.append(rank)
+                for k in top_k:
+                    if rank <= k:
+                        results[k] += 1
+                        if C is not None and (i, j) not in pairs.keys():
+                            pairs[(i, j)]=[k, C[i, j], P[i, j]/marginal[i]]
+                if C is not None and (i, j) not in pairs.keys():
+                    pairs[(i, j)]=[0, C[i, j], P[i, j]/marginal[i]]
+            ranks.append(rank_j) # Rang de la vraie maladie j_true dans la matrice de transport
+              
+        n = len(gt_set)
+        if verbose:
+            print(f"Paires évaluées : {n}")
+            for k in top_k:
+                print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
+            #print(f" Rang moyen: {np.mean(ranks):.2f}")
+
+    return ranks_orpha, ranks_omim, pairs1, pairs2, both
+
+
+def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manifold, weights=None, c=1.):
+    w_omim = omim.copy()
+    w_orpha = orpha.copy()
+
+    def compute_disease_barycenters(
+        profils_omim, node2id, embeddings, deprecated, weights=None, normalize=False, c=1
+        ):
+        W = torch.from_numpy(embeddings.copy())
+        hpo_cols = [c for c in profils_omim.columns if c.startswith('HP')]
+
+        col_meta = {}
+        for col in hpo_cols:
+            resolved = deprecated.get(col, col)
+            if resolved in node2id:
+                w = weights[resolved] if (weights is not None and resolved in weights) else 1.0
+                col_meta[col] = (W[node2id[resolved]], w)  # (Coordonnée, pondération)
+
+        valid_cols = list(col_meta.keys())
+        barycenters = []
+        for _, row in tqdm(profils_omim.iterrows(), total=len(profils_omim), desc="Barycentres"):
+            active = [(col_meta[col][0], col_meta[col][1]) 
+            for col in valid_cols if row[col] == 1]  # Termes actifs
+
+            if len(active) < 1:
+                barycenters.append(None)
+                continue
+
+            points = torch.stack([a[0] for a in active])
+            if weights is None:
+                w = None
+            else:
+                w = torch.tensor([a[1] for a in active], dtype=torch.float32)
+                if normalize:
+                    w = w / w.sum()
+            barycenter = fm.frechet_mean(points, c, w)
+            barycenters.append(barycenter.numpy())
+
+        profils_omim['barycenter'] = barycenters
+        return profils_omim
+    w_omim = compute_disease_barycenters(w_omim, node2id, embeddings, deprecated, weights)
+    w_orpha = compute_disease_barycenters(w_orpha, node2id, embeddings, deprecated, weights)
+
+    omim_bary = torch.tensor(np.stack(w_omim['barycenter'].values),  dtype=torch.float32)
+    orpha_bary = torch.tensor(np.stack(w_orpha['barycenter'].values), dtype=torch.float32)
+
+    n, m = omim_bary.shape[0], orpha_bary.shape[0]
+    u = omim_bary.unsqueeze(1).expand(n, m, -1).reshape(n * m, -1)
+    v = orpha_bary.unsqueeze(0).expand(n, m, -1).reshape(n * m, -1)
+
+    dists = manifold.sqdist(u, v, c=1)  # (n*m,)
+    return dists.reshape(n, m).numpy()
+
+
+def group_by_length(idx_list, weights_list):
+    """Regroupe les indices de disease par taille de support (nb de termes HPO actifs)."""
+    groups = defaultdict(list)
+    for pos, (idx, w) in enumerate(zip(idx_list, weights_list)):
+        if idx:
+            groups[len(idx)].append(pos)
+    stacked = {}
+    for L, positions in groups.items():
+        I = np.array([idx_list[p] for p in positions])
+        W = np.array([weights_list[p] for p in positions])
+        stacked[L] = (np.array(positions), I, W)
+    return stacked
