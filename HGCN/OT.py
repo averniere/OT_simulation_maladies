@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import ot
 import data
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 import frechetmean as fm
 
@@ -32,7 +34,7 @@ def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
     return gt_set, valid_omim, valid_orpha
 
 
-def compute_information_content(df_omim, G_hpo, deprecated=deprecated):
+def compute_information_content(df_omim, G_hpo, deprecated):
     '''
     Entrées :
         - df_omim : dataset de maladies annotées,
@@ -100,7 +102,7 @@ def compute_cost_matrix(omim, orpha, manifold, colname='barycenter'):
     return dists.reshape(n, m).numpy()
 
 
-def emb_norms(df_omim, df_orpha, node2id_w, model, manifold=PoincareManifold()):
+def emb_norms(df_omim, df_orpha, node2id_w, model, manifold):
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     all_hpo = list(hpo_cols)
     model.eval()
@@ -560,6 +562,150 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
             #print(f" Rang moyen: {np.mean(ranks):.2f}")
 
     return ranks_orpha, ranks_omim, pairs1, pairs2, both
+
+
+def evaluate_transport_proba(P, gt_set, seuil):
+    '''
+    Inspiré de https://arxiv.org/pdf/2505.24759.
+    Calcule la probabilité d'association pour chaque paire de maladies (P_ij/Pj+Pij/Pi)/2.
+    Seuille la matrice de probabilités ainsi obtenue. 
+    Renvoie une mesure de précision (% de paires retrouvées parmi les positifs) et de rappel
+    (% de paires retrouvées parmi la vérité de terrain)
+    '''
+    marginal_a = np.sum(P, axis=1)
+    marginal_b = np.sum(P, axis=0)
+    S = (np.divide(P, marginal_a[:, None])+np.divide(P, marginal_b[None, :]))/2
+    S = (S > seuil).astype(int)
+    predicted_positives = S.sum()
+    if predicted_positives == 0:
+        return None, None
+    else: 
+        tp=0
+        for (i,j) in gt_set:
+            tp += S[i,j]
+        precision = tp / predicted_positives
+        recall = tp/len(gt_set)
+        return precision, recall
+
+
+def plot_consistency(ax, reg_strengths, plan_diff, distance_diff, alpha):
+    ax[0].loglog(reg_strengths, plan_diff, lw=4)
+    ax[0].set_ylabel('$||P^* - P_\epsilon^*||_F$', fontsize=25)
+    ax[1].tick_params(which='both', size=20)
+    ax[0].grid(ls='--')
+    ax[1].loglog(reg_strengths, distance_diff, lw=4)
+    ax[1].axhline(alpha, color='red', linestyle='--', linewidth=1.5, label='5% seuil')
+    ax[1].legend()
+    ax[1].set_xlabel('Regularization Strength $\epsilon$', fontsize=25)
+    ax[1].set_ylabel(r'$ 100 \cdot \frac{\langle C, P^*_\epsilon \rangle - \langle C, P^* \rangle}{\langle C, P^* \rangle} $', fontsize=25)
+    ax[1].tick_params(which='both', size=20)
+    ax[1].grid(ls='--') 
+
+
+def plot_regularization(C, grid, alpha=5, a=None, b=None):
+    plan_diff = []
+    distance_diff = []
+    ot_plan_sinkhorn, ot_cost_sinkhorn = compute_transport(C, a, b)
+
+    for epsilon_prime in grid:
+        epsilon = epsilon_prime * np.mean(C)
+        ot_plan_sinkhorn_croissant, ot_cost_sinkhorn_croissant = compute_transport_sinkhorn(C, a, b, epsilon, 10000, 1e-4, False)
+
+        assert ot_cost_sinkhorn_croissant != np.nan, (
+            "Optimal cost is nan due to numerical instabilities."
+            )
+        p = norm(ot_plan_sinkhorn_croissant - ot_plan_sinkhorn)
+        plan_diff.append(p)
+        dist = 100 * (ot_cost_sinkhorn_croissant - ot_cost_sinkhorn)/ot_cost_sinkhorn
+        distance_diff.append(dist)
+
+    fig, ax = plt.subplots(2, 1, figsize=(16, 5*2))
+    reg_strengths = np.mean(C) * grid
+    plot_consistency(ax, reg_strengths, plan_diff, distance_diff, alpha)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_unbalanced(taus, C, epsilon, gt_set):
+    '''
+    Entrées :
+        - taus : liste de valeurs de tau à tester (tau dans [0,1]).
+        - C : matrice de coût précalculée.
+        - epsilon : paramètre de régularisation entropique.
+        - gt_set : vérité de terrain.
+    Sortie : 
+        - Evolution des métriques Top 1 et Top 3, calculées pour lignes et colonnes à la fois,
+        en fonction de tau, pour chaque scénario considéré (unbalanced, semi-balanced).
+    '''
+    scenarios = {
+        'unbalanced' : lambda tau: (tau, tau), 
+        'semi-a': lambda tau: (tau, 1.), 
+        'semi-b': lambda tau: (1., tau)
+        }
+    res = {}
+    for sname, sfun in tqdm(scenarios.items()):
+        res[sname]={'Top 1':[], 'Top 3':[]}
+        for reg in taus:
+            rega, regb = sfun(reg)
+            ot_plan_reg, _ = compute_unbalanced(C, None, None, epsilon, rega, regb, 10000, 1e-4, False)
+            _, _, _, _, both = evaluate_transport(ot_plan_reg, gt_set, C, verbose=False)
+            res[sname]['Top 1'].append(both[1]/len(gt_set))
+            res[sname]['Top 3'].append(both[3]/len(gt_set))
+
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(5, 5))
+    palette = sns.color_palette(n_colors=len(scenarios) * 2)
+    color_idx = 0
+    for sname in scenarios:
+        markers = ['o', 'X']
+        marker_idx = 0
+        for metric in ['Top 1', 'Top 3']:
+            sns.lineplot(
+                x=taus, 
+                y=res[sname][metric], 
+                marker=markers[marker_idx], 
+                label=f'{sname} - {metric}',
+                color=palette[color_idx],
+                ax=ax,
+            )
+            marker_idx += 1
+        color_idx += 1
+    ax.set_xlabel(r'$\tau$')
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Max Top 1 = {round(np.max([np.max(res[sname]['Top 1']) for sname in res]), 2)}, Top 3 = {round(np.max([np.max(res[sname]['Top 3']) for sname in res]), 2)}")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_PR_curve(P, gt_set, seuils):
+    '''
+    Courbe précision-rappel calculée sur le plan de transport, à partir de la probabilité
+    d'association obtenue grâce à evaluate_transport_proba.
+    Entrées :
+        - P : plan de transport.
+        - gt_set : vérité de terrain.
+        - seuils : liste de seuils s, sur les probabilités d'associations.
+    Sortie : 
+        - plot de la courbe PR.
+    '''
+    precision, recall = [], []
+    for s in seuils:
+        acc, rec = evaluate_transport_proba(P, gt_set, s)
+        if acc is not None:
+            precision.append(acc)
+            recall.append(rec)
+    # Plot
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(4,4))
+    sns.lineplot(x=recall, y=precision, markers='X', ax=ax)
+    ax.set_ylim(0,1)
+    ax.set_xlim(0,1)
+    ax.set_title('Courbe précision-rappel')
+    plt.tight_layout()
+    plt.plot()
 
 
 def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manifold, weights=None, c=1.):

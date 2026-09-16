@@ -44,11 +44,12 @@ categories = {
     'frequency' : list(frequency)}
 
 
-def read_hpoa(path):
+def read_hpoa(path, usecols=None, dtype=None):
     with open(path, 'r') as f:
         skip = sum(1 for line in f if line.startswith('#'))
-    return pd.read_csv(path, sep='\t', skiprows=skip, low_memory=False)
-
+    return pd.read_csv(
+        path, sep='\t', skiprows=skip, low_memory=False, usecols=usecols
+    )
 
 cols_needed = ['database_id', 'hpo_id', 'disease_name', 'frequency']
 df_hpoa = read_hpoa('../data/phenotype_omim_orpha.hpoa', usecols=cols_needed)

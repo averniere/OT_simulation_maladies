@@ -51,7 +51,7 @@ class Args:
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
     dim : int = 50  # Dimension de l'embedding
-    optimizer : str = 'Adam'  # ou 'Adam' (ne marche pas pour le moment)
+    optimizer : str = 'Adam'  # ou 'Adam'
     compute_structural : bool = True
 
 args = Args()
