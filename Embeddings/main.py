@@ -14,7 +14,7 @@ from train import train
 from data import *
 from data_utils import add_corresponding_terms, add_edges
 from information_content import *
-from OT_utils import *
+from OT import *
 
 
 # TEST : on relie les termes présents dans une même maladie ----------------------------------

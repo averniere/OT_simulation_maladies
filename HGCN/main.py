@@ -5,9 +5,9 @@ import numpy as np
 import datetime
 
 from dataclasses import dataclass
-from load_data import *
+from data import *
 from train import train
-from data import add_edges, add_corresponding_terms, get_ancestors0
+from load_data import add_edges, add_corresponding_terms, get_ancestors0
 
 union_diseases = add_corresponding_terms(work_omim, work_orpha, df_orpha_omim)
 hpo_cols = [c for c in union_diseases.columns if c.startswith('HP')]
@@ -51,7 +51,7 @@ class Args:
     act : str = 'relu'  # Fonction d'activation
     num_layers : int = 2  # Nb of hidden layers
     dim : int = 50  # Dimension de l'embedding
-    optimizer : str = 'Adam'  # ou 'Adam'
+    optimizer : str = 'Adam'  # ne pas utiliser 'RSGD'
     compute_structural : bool = True
 
 args = Args()

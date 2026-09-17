@@ -10,75 +10,7 @@ import frechetmean as fm
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from collections import defaultdict
-
-
-# ===========================================================================================
-# ============================= Fonctions générales, utiles =================================
-# ===========================================================================================
-
-def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
-    omim_to_idx = {v: i for i, v in enumerate(work_omim['database_id'].values)} 
-    orpha_to_idx = {v: i for i, v in enumerate(work_orpha['database_id'].values)}
-
-    ground_truth = []
-    valid_omim = []
-    valid_orpha = []
-    for _, row in df_orpha_omim.iterrows():
-        if row['omim_id'] in omim_to_idx and row['orpha_id'] in orpha_to_idx:
-            i = omim_to_idx[row['omim_id']]
-            j = orpha_to_idx[row['orpha_id']]
-            ground_truth.append((i, j))
-            valid_omim.append(row['omim_id'])
-            valid_orpha.append(row['orpha_id'])
-    gt_set = set(ground_truth)
-    return gt_set, valid_omim, valid_orpha
-
-
-def compute_information_content(df_omim, G_hpo, deprecated):
-    '''
-    Entrées :
-        - df_omim : dataset de maladies annotées,
-        - G_hpo : graphe de l'ontologie HPO,
-        - deprecated : liste de termes apparaissant dans les maladies et mis à jour depuis.
-    Sortie :
-        - Dictionnaire qui associe à chaque terme HPO apparaissant dans au moins une maladie la 
-        valeur de l'IC.
-        - diseases : dictionnaire {terme HPO : liste des maladies qui le contiennent}
-        - all_diseases : dictionnaire {terme HPO : maladies qui le contiennent avec propagation ancestrale}
-    NB : On pondère sur l'ensemble des noeuds du graphe, pas juste sur les maladies. Du point de vue
-    de l'interprétation c'est moins élégant, car on n'a pas de probabilité d'apparition dans une maladie,
-    mais au niveau des résultats c'est un peu mieux. 
-    '''
-    colnames = [c for c in df_omim.columns if c.startswith('HP:')]
-    hp_matrix = df_omim[colnames].values
-    ids = df_omim.index.tolist()
-
-    weights = defaultdict(float)
-    diseases = defaultdict(set)
-    all_diseases = defaultdict(set)
-    ancestors = {}
-
-    def get_ancestors(term):
-        if term not in ancestors:
-            ancestors[term] = data.get_ancestors0(G_hpo, term)
-        return ancestors[term]
-
-    row_idxs, col_idxs = np.where(hp_matrix > 0)
-    for row_idx, col_idx in zip(row_idxs, col_idxs):
-        disease_id = ids[row_idx]
-        term = colnames[col_idx]  # terme HPO
-        resolved = deprecated.get(term, term)
-        
-        weights[resolved] += hp_matrix[row_idx, col_idx]  #1
-        diseases[resolved].add(disease_id)
-        all_diseases[resolved].add(disease_id)
-        
-        for ancestor in get_ancestors(resolved):
-            weights[ancestor] += hp_matrix[row_idx, col_idx]  #1
-            all_diseases[ancestor].add(disease_id)
-
-    total = sum(weights.values())
-    return {t: w / total for t, w in weights.items()}, diseases, all_diseases
+from numpy.linalg import norm
 
 
 # ===========================================================================================
@@ -241,113 +173,6 @@ def compute_costs_matrix_wasserstein2(
     return C
 
 
-def compute_costs_matrix_wasserstein_batched(
-    df_omim, df_orpha, 
-    node2id_w, 
-    embeddings, 
-    manifold,
-    c,
-    weights=None,
-    deprecated=data.deprecated,
-    S=None,
-    gromov=False
-    ):
-    n = len(df_omim)
-    m = len(df_orpha)
-    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
-
-    print("Precompute...")
-    def precompute(df, weights=weights):
-        '''
-        Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
-        le vecteur de poids uniformes associés.
-        '''
-        X = df[hpo_cols].to_numpy(dtype=bool)
-        resolved_cols = np.array(
-            [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
-            dtype=object)
-        valid_mask = resolved_cols != np.array(None)
-        X_valid = X[:, valid_mask]
-        resolved_valid = resolved_cols[valid_mask]
-        terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
-        if weights is None: 
-            w = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
-        else : 
-            w = [np.array([weights[t] for t in term]/np.sum([weights[t] for t in term])) for term in terms]
-        return terms, w
-
-    terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
-    terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
-    print("Finished !")
-
-    all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
-    term2idx = {h: k for k, h in enumerate(all_terms)}
-    hpo_indices = [node2id_w[h] for h in all_terms]  # Indices selon node2id_w
-    E = embeddings[hpo_indices]  # Fonctionne si embeddings est construit de la même manière que node2id_w
-    if isinstance(E, np.ndarray):
-        E = torch.tensor(E, dtype=torch.float32)
-
-    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
-    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
-
-    C = np.zeros((n, m))
-
-    print("Precomputing full HPO distance matrix...")
-    K = E.shape[0]
-    D_full = np.zeros((K, K), dtype=np.float32)
-    BLOCK = 128  # Réduire si encore OOM (128, 64...)
-    for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
-        Ei = E[i:i+BLOCK]          # (b, dim)
-        b = Ei.shape[0]
-        for j in range(0, K, BLOCK):
-            Ej = E[j:j+BLOCK]      # (b2, dim)
-            b2 = Ej.shape[0]
-                
-            Ei_exp = Ei.unsqueeze(1).expand(b, b2, -1).reshape(b * b2, -1)
-            Ej_exp = Ej.unsqueeze(0).expand(b, b2, -1).reshape(b * b2, -1)
-                
-            d = np.sqrt(manifold.sqdist(Ei_exp, Ej_exp, c))
-            D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
-    
-    print(f"HPO distance matrix: {D_full.shape}")
-    if S is not None: 
-        D_full /= D_full.max()
-        simi = S[np.ix_(hpo_indices, hpo_indices)]
-        D_full -= D_full * simi  # éventuellement : alpha*simi
-
-    def compute_costs_grouped(
-        D_full, idx_i, idx_j, weights_i, weights_j, n, m, 
-        epsilon=0.05, device="cuda", max_batch_elems=2_000_000
-        ):
-        C = np.zeros((n, m), dtype=np.float32)
-        groups_i = group_by_length(idx_i, weights_i)   # {L: (positions, I(G,L), W(G,L))}
-        groups_j = group_by_length(idx_j, weights_j)
-        print(f"{len(groups_i)} tailles distinctes côté OMIM, {len(groups_j)} côté Orpha")
-
-        for Li, (pos_i, I, Wi) in tqdm(groups_i.items(), desc="Length groups (OMIM)"):
-            for Lj, (pos_j, J, Wj) in groups_j.items():
-                Gi, Gj = I.shape[0], J.shape[0]
-                chunk_size = max(1, max_batch_elems // (Li * Lj * Gj))
-                for gi_start in range(0, Gi, chunk_size):
-                    gi_end = min(gi_start + chunk_size, Gi)
-                    I_chunk = I[gi_start:gi_end] 
-                    Wi_chunk = Wi[gi_start:gi_end]
-                    g = I_chunk.shape[0]
-                    cost_block = D_full[I_chunk[:, None, :, None], J[None, :, None, :]]
-
-                    B = g * Gj
-                    Ms = torch.tensor(cost_block.reshape(B, Li, Lj), dtype=torch.float32)
-                    As = torch.tensor(np.repeat(Wi_chunk, Gj, axis=0), dtype=torch.float32)
-                    Bs = torch.tensor(np.tile(Wj, (g, 1)), dtype=torch.float32)
-
-                    costs = compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, device=device)
-                    costs = costs.reshape(g, Gj)
-
-                    rows = pos_i[gi_start:gi_end]
-                    C[np.ix_(rows, pos_j)] = costs
-        return C
-    return compute_costs_grouped(D_full, idx_i, idx_j, weights_i, weights_j, n, m)
-
 # ===========================================================================================
 # =============================== Méthodes de transport =====================================
 # ===========================================================================================
@@ -447,9 +272,9 @@ def compute_unbalanced(C: np.ndarray,
     return optimal_plan_sinkhorn, optimal_cost_sinkhorn
 
 
-#===========================================================================================
-#============================== Evaluation des résultats ===================================
-#===========================================================================================
+# ===========================================================================================
+# ============================== Evaluation des résultats ===================================
+# ===========================================================================================
 
 
 def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
@@ -773,3 +598,116 @@ def group_by_length(idx_list, weights_list):
         W = np.array([weights_list[p] for p in positions])
         stacked[L] = (np.array(positions), I, W)
     return stacked
+
+
+# ===========================================================================================
+# ================================ Testées et inutilisées ===================================
+# ===========================================================================================
+
+
+def compute_costs_matrix_wasserstein_batched(
+    df_omim, df_orpha, 
+    node2id_w, 
+    embeddings, 
+    manifold,
+    c,
+    weights=None,
+    deprecated=data.deprecated,
+    S=None,
+    gromov=False
+    ):
+    n = len(df_omim)
+    m = len(df_orpha)
+    hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
+
+    print("Precompute...")
+    def precompute(df, weights=weights):
+        '''
+        Renvoie pour chaque maladie (ligne) du dataframe df la liste des termes HPO actifs et 
+        le vecteur de poids uniformes associés.
+        '''
+        X = df[hpo_cols].to_numpy(dtype=bool)
+        resolved_cols = np.array(
+            [deprecated.get(col, col) if deprecated.get(col, col) in node2id_w else None for col in hpo_cols], 
+            dtype=object)
+        valid_mask = resolved_cols != np.array(None)
+        X_valid = X[:, valid_mask]
+        resolved_valid = resolved_cols[valid_mask]
+        terms = [list(resolved_valid[row_mask]) for row_mask in X_valid]
+        if weights is None: 
+            w = [np.ones(len(t)) / len(t) if t else np.array([]) for t in terms]
+        else : 
+            w = [np.array([weights[t] for t in term]/np.sum([weights[t] for t in term])) for term in terms]
+        return terms, w
+
+    terms_i, weights_i = precompute(df_omim)  # Termes actifs, poids pour les maladies sources
+    terms_j, weights_j = precompute(df_orpha)  # Termes actifs, poids pour les maladies destinations
+    print("Finished !")
+
+    all_terms = list({h for ts in terms_i + terms_j for h in ts})  # Tous les termes actifs
+    term2idx = {h: k for k, h in enumerate(all_terms)}
+    hpo_indices = [node2id_w[h] for h in all_terms]  # Indices selon node2id_w
+    E = embeddings[hpo_indices]  # Fonctionne si embeddings est construit de la même manière que node2id_w
+    if isinstance(E, np.ndarray):
+        E = torch.tensor(E, dtype=torch.float32)
+
+    idx_i = [[term2idx[h] for h in ts] for ts in terms_i]  # Index des termes actifs par maladies sources
+    idx_j = [[term2idx[h] for h in ts] for ts in terms_j]  # Index des termes actifs par maladies destinations
+
+    C = np.zeros((n, m))
+
+    print("Precomputing full HPO distance matrix...")
+    K = E.shape[0]
+    D_full = np.zeros((K, K), dtype=np.float32)
+    BLOCK = 128  # Réduire si encore OOM (128, 64...)
+    for i in tqdm(range(0, K, BLOCK), desc="Distance matrix rows"):
+        Ei = E[i:i+BLOCK]          # (b, dim)
+        b = Ei.shape[0]
+        for j in range(0, K, BLOCK):
+            Ej = E[j:j+BLOCK]      # (b2, dim)
+            b2 = Ej.shape[0]
+                
+            Ei_exp = Ei.unsqueeze(1).expand(b, b2, -1).reshape(b * b2, -1)
+            Ej_exp = Ej.unsqueeze(0).expand(b, b2, -1).reshape(b * b2, -1)
+                
+            d = np.sqrt(manifold.sqdist(Ei_exp, Ej_exp, c))
+            D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
+    
+    print(f"HPO distance matrix: {D_full.shape}")
+    if S is not None: 
+        D_full /= D_full.max()
+        simi = S[np.ix_(hpo_indices, hpo_indices)]
+        D_full -= D_full * simi  # éventuellement : alpha*simi
+
+    def compute_costs_grouped(
+        D_full, idx_i, idx_j, weights_i, weights_j, n, m, 
+        epsilon=0.05, device="cuda", max_batch_elems=2_000_000
+        ):
+        C = np.zeros((n, m), dtype=np.float32)
+        groups_i = group_by_length(idx_i, weights_i)   # {L: (positions, I(G,L), W(G,L))}
+        groups_j = group_by_length(idx_j, weights_j)
+        print(f"{len(groups_i)} tailles distinctes côté OMIM, {len(groups_j)} côté Orpha")
+
+        for Li, (pos_i, I, Wi) in tqdm(groups_i.items(), desc="Length groups (OMIM)"):
+            for Lj, (pos_j, J, Wj) in groups_j.items():
+                Gi, Gj = I.shape[0], J.shape[0]
+                chunk_size = max(1, max_batch_elems // (Li * Lj * Gj))
+                for gi_start in range(0, Gi, chunk_size):
+                    gi_end = min(gi_start + chunk_size, Gi)
+                    I_chunk = I[gi_start:gi_end] 
+                    Wi_chunk = Wi[gi_start:gi_end]
+                    g = I_chunk.shape[0]
+                    cost_block = D_full[I_chunk[:, None, :, None], J[None, :, None, :]]
+
+                    B = g * Gj
+                    Ms = torch.tensor(cost_block.reshape(B, Li, Lj), dtype=torch.float32)
+                    As = torch.tensor(np.repeat(Wi_chunk, Gj, axis=0), dtype=torch.float32)
+                    Bs = torch.tensor(np.tile(Wj, (g, 1)), dtype=torch.float32)
+
+                    costs = compute_transport_sinkhorn_batch(Ms, As, Bs, epsilon, device=device)
+                    costs = costs.reshape(g, Gj)
+
+                    rows = pos_i[gi_start:gi_end]
+                    C[np.ix_(rows, pos_j)] = costs
+        return C
+    return compute_costs_grouped(D_full, idx_i, idx_j, weights_i, weights_j, n, m)

@@ -6,7 +6,7 @@ from tqdm import tqdm
 from RiemAdam import RiemannianAdam
 from RSGD import RiemanianSGD
 from model import LPModel
-from data import load_data2, load_data
+from load_data import load_data2, load_data
 #from geoopt.optim import RiemannianAdam
 
 

@@ -3,7 +3,7 @@ import torch
 import re
 import pandas as pd
 import numpy as np
-import OT_utils as otu
+import OT as otu
 import networkx as nx
 #import data 
 

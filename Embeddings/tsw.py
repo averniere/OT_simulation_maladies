@@ -4,7 +4,7 @@ import numba
 from collections import deque
 from tqdm import tqdm
 from data import *
-from OT_utils import compute_transport_sinkhorn, compute_transport, evaluate_transport
+from OT import compute_transport_sinkhorn, compute_transport, evaluate_transport
 
 
 class tsw:
