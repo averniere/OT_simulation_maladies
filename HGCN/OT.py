@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import ot
-import data
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -34,30 +33,31 @@ def compute_cost_matrix(omim, orpha, manifold, colname='barycenter'):
     return dists.reshape(n, m).numpy()
 
 
-def emb_norms(df_omim, df_orpha, node2id_w, model, manifold):
+def emb_norms(df_omim, df_orpha, node2id_w, W, manifold):
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
     all_hpo = list(hpo_cols)
-    model.eval()
-    W = model.weight.detach().cpu().numpy()
+
     indices = [node2id_w[hpo] for hpo in all_hpo if hpo in node2id_w]
     known_pos = [i for i, hpo in enumerate(all_hpo) if hpo in node2id_w]
     W_known = torch.tensor(W[indices], dtype=torch.float32)
     origin = torch.zeros_like(W_known)
     with torch.no_grad():
-        hyp_norms = manifold.distance(W_known, origin, c=1.).cpu().numpy()
+        hyp_norms = np.sqrt(manifold.sqdist(W_known, origin, c=1.))
     norms = np.zeros(len(all_hpo))
     norms[known_pos] = hyp_norms
 
     return norms, all_hpo
 
 
-def compute_cost_matrix_pseudo_jacc(df_omim, df_orpha, node2id_w, model, block_size=256):
+def compute_cost_matrix_pseudo_jacc(
+    df_omim, df_orpha, node2id_w, embeddings, manifold, block_size=256
+    ):
     """Hamming en pondérant par les embeddings."""
     n = df_omim.shape[0]
     m = df_orpha.shape[0]
     C = np.zeros((n, m))
     print("Compute norms")
-    norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, model)
+    norms, all_hpo = emb_norms(df_omim, df_orpha, node2id_w, embeddings, manifold)
     print("Norms computed !")
     
     A = df_omim.reindex(columns=all_hpo, fill_value=0)[all_hpo].values.astype(np.float32)
@@ -81,11 +81,26 @@ def compute_costs_matrix_wasserstein2(
     embeddings, 
     manifold,
     c,
+    deprecated,
     weights=None,
-    deprecated=data.deprecated,
     S=None,
-    gromov=False
     ):
+    '''
+    Entrées : 
+        - df_omim, df_orpha : dataframes d'annotations de maladies.
+        - node2id_w : dictionnaire {HP:id} dans le graphe (doit correspondre au mapping de
+        la représentation).
+        - embeddings : coordonnées des noeuds apprises.
+        - manifold : PoincareManifold()
+        - c : (moins la) courbure de l'espace dans lequel on a appris la représentation. On prendra
+        toujours c=1.
+        - weights : dictionnaire {HP: w(HP)} de pondérations associées aux termes HPO, utilisés
+        dans la résolution des n x m problèmes de transport. Si None, les pondérations utilisées
+        sont uniformes.
+        - S : tests infructueux.
+    Sortie :
+        - Matrice de coût, donnant la distance de Wasserstein entre chaque maladie.
+    '''
     n = len(df_omim)
     m = len(df_orpha)
     hpo_cols = [c for c in df_omim.columns if c.startswith('HP:')]
@@ -144,23 +159,17 @@ def compute_costs_matrix_wasserstein2(
             D_full[i:i+BLOCK, j:j+BLOCK] = d.reshape(b, b2).cpu().numpy()
     
     print(f"HPO distance matrix: {D_full.shape}")
-    if S is not None: 
-        D_full/= D_full.max()
-        simi = S[np.ix_(hpo_indices, hpo_indices)]
-        D_full -= D_full * simi  # éventuellement : alpha*simi
+    # if S is not None: 
+        # D_full/= D_full.max()
+        # simi = S[np.ix_(hpo_indices, hpo_indices)]
+        # D_full -= D_full * simi  # éventuellement : alpha*simi
 
     def compute_row(i):
         if not idx_i[i]:
             return i, np.zeros(len(terms_j))
-        # Ei = E[idx_i[i]]
         row = np.zeros(len(terms_j))
         valid_js = [j for j in range(len(terms_j)) if idx_j[j]]
         for j in valid_js:
-            if gromov: 
-                C1 = D_full[np.ix_(idx_i[i], idx_i[i])]
-                C2 = D_full[np.ix_(idx_j[j], idx_j[j])]
-                gm_plan = ot.gromov_wasserstein2(C1, C2)
-                row[j] = np.sqrt(gm_plan)/2
             M = D_full[np.ix_(idx_i[i], idx_j[j])]
             _, row[j] = compute_transport(M, weights_i[i], weights_j[j])
         return i, row
@@ -572,6 +581,7 @@ def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manif
 
         profils_omim['barycenter'] = barycenters
         return profils_omim
+
     w_omim = compute_disease_barycenters(w_omim, node2id, embeddings, deprecated, weights)
     w_orpha = compute_disease_barycenters(w_orpha, node2id, embeddings, deprecated, weights)
 
@@ -582,7 +592,7 @@ def compute_costs_barycenter(omim, orpha, node2id, embeddings, deprecated, manif
     u = omim_bary.unsqueeze(1).expand(n, m, -1).reshape(n * m, -1)
     v = orpha_bary.unsqueeze(0).expand(n, m, -1).reshape(n * m, -1)
 
-    dists = manifold.sqdist(u, v, c=1)  # (n*m,)
+    dists = np.sqrt(manifold.sqdist(u, v, c=1))  # (n*m,)
     return dists.reshape(n, m).numpy()
 
 
@@ -611,8 +621,8 @@ def compute_costs_matrix_wasserstein_batched(
     embeddings, 
     manifold,
     c,
+    deprecated,
     weights=None,
-    deprecated=data.deprecated,
     S=None,
     gromov=False
     ):

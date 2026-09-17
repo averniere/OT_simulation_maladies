@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy import stats
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, precision_score, recall_score
+from sklearn.metrics import precision_recall_curve, ConfusionMatrixDisplay, confusion_matrix, precision_score, recall_score, roc_auc_score, average_precision_score
 
 
 def seuil_masse(P, gt_set, alphas=[0.10, 0.05], seed=42):
@@ -28,7 +29,7 @@ def seuil_masse(P, gt_set, alphas=[0.10, 0.05], seed=42):
     n_scores = len(scores_calib)
     seuil = []
     for a in alphas:
-        q_level = np.ceil((n_scores + 1) * (1 - a)) / n_scores
+        q_level = np.ceil((n + 1) * (1 - a)) / n_scores
         seuil.append(np.quantile(scores_calib, q_level))
     return seuil
 
@@ -61,34 +62,41 @@ def seuil_rang(P, gt_set, alphas=[0.1, 0.05], seed=42):
     n_scores = len(scores_calib)
     seuil = []
     for a in alphas:
-        q_level = np.ceil((n_scores + 1) * (1 - a)) / n_scores
+        q_level = np.ceil((n + 1) * (1 - a)) / n_scores
         seuil.append(np.quantile(scores_calib, q_level))
     return seuil
 
 
-def construct_features(P, gt_set, target_k=0, seed=42):
+def construct_features(P, gt_set, seed=42):
     P_norm = P/P.sum(axis=1, keepdims=True)
     # Construction des features et de y
     top_1 = []
     ratio_12 = []
+    rank_true = []
     correct = []
     concentration = []
+    sd = []
     for i, j in gt_set:
         ranked_cols = np.argsort(P[i])[::-1]
         rank = np.where(ranked_cols == j)[0]
         if len(rank) == 0:
             continue
-        top_1.append(P_norm[i, ranked_cols[0]])
-        ratio_12.append(P_norm[i, ranked_cols[0]]/P_norm[i, ranked_cols[1]])
-        if rank[0] <= target_k:
-            correct.append(True)
-        else:
-            correct.append(False)
-        line = P[i,:]
+        rank_true.append(rank[0] + 1)
+        top_1.append(P[i, ranked_cols[0]])
+        p1, p2 = P_norm[i, ranked_cols[0]], P_norm[i, ranked_cols[1]]
+        ratio_12.append(np.log(p1 + 1e-12) - np.log(p2 + 1e-12)) 
+        correct.append(rank[0] == 0)
+        line = P_norm[i, :]
         concentration.append(-np.sum(line[line>0] * np.log(line[line>0])))
+        sd.append(np.std(line))
 
-    X = pd.DataFrame({'top_1': top_1, 'ratio':ratio_12, 'concentration': concentration}).values
-    X = (X-X.mean())/X.std()
+    X = pd.DataFrame({
+        'top_1': top_1, 
+        'ratio': ratio_12, 
+        'std': sd,
+        #'concentration': concentration
+        }).values
+    X = (X - X.mean(axis=0)) / X.std(axis=0)
     y = correct
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=seed)
@@ -104,7 +112,7 @@ def evaluate_classifier(model, X_test, y_test, average="weighted", show_confusio
     """
 
     y_pred = model.predict(X_test)
-    y_pred_proba = None if hasattr(model, "predict_proba") else model.predict_proba(X_test)
+    y_pred_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
 
     # Métriques
     accuracy = model.score(X_test, y_test)
@@ -114,6 +122,12 @@ def evaluate_classifier(model, X_test, y_test, average="weighted", show_confusio
     print(f"Accuracy : {accuracy:.3f}")
     print(f"Precision: {precision:.3f}")
     print(f"Recall   : {recall:.3f}")
+
+    if y_pred_proba is not None:
+        auc = roc_auc_score(y_test, y_pred_proba)
+        ap = average_precision_score(y_test, y_pred_proba)
+        print(f"ROC-AUC : {auc:.3f}")
+        print(f"PR-AUC : {ap:.3f}")
 
     # Matrice de confusion
     if show_confusion:
@@ -138,12 +152,26 @@ def evaluate_classifier(model, X_test, y_test, average="weighted", show_confusio
     }
 
 
-def logistic_reg(P, gt_set, seed=42):
+def logistic_reg(P, gt_set, seuil=0.9, seed=42):
     X_train, X_test, y_train, y_test = construct_features(P, gt_set, seed)
-    model = LogisticRegression(C=np.inf, max_iter=1000, random_state=42)
+    model = LogisticRegression(class_weight='balanced', penalty=None, max_iter=1000, random_state=42)
     model.fit(X_train, y_train)
     metrics = evaluate_classifier(model, X_test, y_test)
-    return metrics
+    coefs = pd.Series(model.coef_[0], index=['top_1', 'ratio_12', 'sds'])
+    print(coefs.sort_values(key=abs, ascending=False))
+    proba_test = model.predict_proba(X_test)[:, 1]
+    precision, recall, thresholds = precision_recall_curve(y_test, proba_test)
+
+    # Exemple : quel seuil garantit 90% de précision ?
+    idx = np.argmax(precision >= seuil)
+    seuil_90 = thresholds[idx]
+    print(f"Seuil pour {seuil*100}% précision : {seuil_90:.3f} (recall correspondant : {recall[idx]:.3f})")
+
+    plt.plot(recall, precision)
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.show()
+    return metrics, X_train, X_test, y_train, y_test, model
 
 
 def seuil_commun(df1, df2, P, gt_set, rg=2, alpha=0.8):
@@ -203,7 +231,7 @@ def seuil_commun(df1, df2, P, gt_set, rg=2, alpha=0.8):
 
     fig, ax1 = plt.subplots(figsize=(9, 5))
     ax1.plot(x_values, g_values, marker='o', markersize=3, color='tab:blue', label='g(x)')
-    ax1.fill_between(x_values, lower_bounds, upper_bounds, color='tab:blue', alpha=0.2, label='IC 95% (Wilson)')
+    ax1.fill_between(x_values, lower_bounds, upper_bounds, color='tab:blue', alpha=0.2, label=f'IC 95% (Wilson)')
     ax1.axhline(y=alpha, color='red', linestyle='--', label=f"y = {alpha}")
     ax1.set_xlabel("x")
     ax1.set_ylabel("g(x)")
@@ -217,3 +245,4 @@ def seuil_commun(df1, df2, P, gt_set, rg=2, alpha=0.8):
 
     plt.tight_layout()
     plt.show()
+    return x_values, g_values

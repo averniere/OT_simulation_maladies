@@ -42,6 +42,16 @@ def save_method(dict_method, method_name, savedir=Path("../data/utils")):
     os.replace(tmp_path, path)
 
 
+def load_all_methods(savedir=Path("../data/utils")):
+    savedir.mkdir(parents=True, exist_ok=True)
+    dict_method = {}
+    for f in savedir.glob("*.npz"):
+        loaded = np.load(f)
+        dict_method[f.stem] = {k: loaded[k] for k in loaded.files}
+        loaded.close()
+    return dict_method
+    
+
 def get_ancestors0(G, node):
     visited = set()
     queue = list(G.successors(node))
@@ -135,7 +145,7 @@ def precompute(df, node2id):
     hpo_cols = [c for c in df.columns if c.startswith('HP')]
     X = df[hpo_cols].to_numpy(dtype=bool)
     resolved_cols = np.array(
-        [deprecated.get(col, col) if ddeprecated.get(col, col) in node2id else None for col in hpo_cols], 
+        [deprecated.get(col, col) if deprecated.get(col, col) in node2id else None for col in hpo_cols], 
         dtype=object)
     valid_mask = resolved_cols != np.array(None)
     X_valid = X[:, valid_mask]

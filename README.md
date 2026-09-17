@@ -23,11 +23,62 @@ Le dépôt s'articule autour des dossiers suivant :
 4. `HGCN`, où l'on apprend et l'on utilise une représentation de l'ontologie HPO dans le disque de Poincaré selon la méthode de [Chami et al. (2019)](https://arxiv.org/pdf/1910.12933) ; 
 5. `OT`, qui contient le processus de simulations de maladies complexes.
 
-## Organisation des fichiers
+```
+|--Embeddings
+|   |--__init__.py
+|   |--analyse.ipynb
+|   |--batched_dataset.py
+|   |--data_utils.py
+|   |--data.py
+|   |--evaluation.py
+|   |--frechetmean.py
+|   |--frlc0.py
+|   |--information_content.py
+|   |--lorentz.py
+|   |--main.py
+|   |--model.py
+|   |--OT.py
+|   |--poincare.py
+|   |--RSGD.py
+|   |--simulations_add_metrics.py
+|   |--simulations_process.py
+|   |--simulations.py
+|   |--statistiques_descriptives.ipynb
+|   |--test.ipynb
+|   |--train.py
+|   |--tsw_node2vec.ipynb
+|   |--tsw.py
+|--HGCN
+|   |--__init__.py
+|   |--data_utils.py
+|   |--data.py
+|   |--decoder.py
+|   |--encoder.py
+|   |--evaluation.py
+|   |--frechetmean.py
+|   |--hyp_layer.py
+|   |--load_data.py
+|   |--main.py
+|   |--model.py
+|   |--OT.py
+|   |--poincare.py
+|   |--RiemAdam.py
+|   |--RSGD.py
+|   |--similarities.py
+|   |--simulations.py
+|   |--test.ipynb
+|   |--train.py
+|--.gitignore
+|--README.md
+|--requirements.txt
+
+```
+
+## Organisation des dossiers
 Dossier `Embeddings`:
 - `batched_dataset.py`, `lorentz.py`, `model.py`, `main.py`, `poincare.py`, `RSGD.py`, `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
 - `data.py` permet de charger les tables d'annotations de maladies, les interactions PPI, gène-maladie, gène-protéine. `statistiques_descriptives.ipynb` est un notebook présentant les premières statistiques descriptives relatives aux données chargées.
-- `data_utils.py`, `OT_utils.py`, `information_content.py`, `tsw.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Les notebooks `OT_test_couts.ipynb` et `tsw_node2vec.ipynb` contiennent les résultats.
+- `data_utils.py`, `OT.py`, `information_content.py`, `tsw.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Les notebooks `test.ipynb` et `tsw_node2vec.ipynb` contiennent les résultats.
 - `evaluation.py` contient les fonctions utilisées pour prédire ou non une bonne association (encore en exploration).
 - `simulations_add_metrics.py`, `simulations_process.py`, `simulations.py` et le dossier `simuls` reprennent le cadre de simulation de maladies complexes à partir de maladies mendéliennes.
 
@@ -42,7 +93,7 @@ Dans le dossier `Embeddings`:
     - *compute_information_content* : calculer l'IC des termes HPO à partir d'une base de données de maladies.
 - `data_utils.py` :
     - *f_ground_truth* : retourne les couples (i, j) d'indices de maladies OMIM-Orphanet correspondantes.
-- `OT_utils.py` : 
+- `OT.py` : 
     - *basic_cost_matrix* : calculer la matrice de coût associée aux dissimilarités de Jaccard, Hamming ou à la distance euclidienne.
     - *compute_cost_matrix* : calculer la matrice de coût entre barycentres dans le disque de Poincaré.
     - *cost_matrix_hamm* : calculer la matrice de coût associée à la dissimilarité de Hamming avec une pondération quelconque. 
