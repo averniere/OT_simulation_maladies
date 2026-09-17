@@ -482,7 +482,7 @@ def read_transport_plan(P, gt_set):
     return ranks
 
 
-def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
+def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5), verbose=True):
     """
     Évalue le plan de transport P contre la vérité terrain.
     Inputs : 
@@ -501,95 +501,64 @@ def evaluate_transport(P, gt_set, C, exact=True, top_k=(1, 3, 5), verbose=True):
     ranks_omim = []
     marginal_a = np.sum(P, axis=1)
     marginal_b = np.sum(P, axis=0)
-    if exact: 
-        for (i, j_true) in gt_set:
-            # Colonnes triées par masse décroissante pour la ligne i
-            ranked_cols = np.argsort(P[i])[::-1]
-            rank = np.where(ranked_cols == j_true)[0]
-            if len(rank) == 0:
-                continue
-            rank = rank[0] + 1
-            ranks_orpha.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
+    for (i, j_true) in gt_set:
+        # Colonnes triées par masse décroissante pour la ligne i
+        ranked_cols = np.argsort(P[i])[::-1]
+        rank = np.where(ranked_cols == j_true)[0]
+        if len(rank) == 0:
+            continue
+        rank = rank[0] + 1
+        ranks_orpha.append(rank) # Rang de la vraie maladie j_true dans la matrice de transport
 
-            # Lignes triées par masse décroissante pour la colonne j_true
-            ranked_lines = np.argsort(P[:,j_true])[::-1]
-            rank2 = np.where(ranked_lines == i)[0]
-            if len(rank2) == 0:
-                continue
-            rank2 = rank2[0] + 1
-            ranks_omim.append(rank2)
+        # Lignes triées par masse décroissante pour la colonne j_true
+        ranked_lines = np.argsort(P[:,j_true])[::-1]
+        rank2 = np.where(ranked_lines == i)[0]
+        if len(rank2) == 0:
+            continue
+        rank2 = rank2[0] + 1
+        ranks_omim.append(rank2)
 
-            for k in top_k:
-                if rank <= k and rank2 <= k:
-                    results1[k] += 1
-                    results2[k] += 1
-                    both[k] += 1
+        for k in top_k:
+            if rank <= k and rank2 <= k:
+                results1[k] += 1
+                results2[k] += 1
+                both[k] += 1
+                if C is not None and (i, j_true) not in pairs1.keys():
+                    pairs1[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                if C is not None and (i, j_true) not in pairs2.keys():
+                    pairs2[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+            elif rank > k or rank2 > k:
+                if rank <= k:
+                    results1[k] +=1
                     if C is not None and (i, j_true) not in pairs1.keys():
                         pairs1[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_a[i]]
                     if C is not None and (i, j_true) not in pairs2.keys():
+                        pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+                elif rank2 <= k:
+                    results2[k] +=1
+                    if C is not None and (i, j_true) not in pairs1.keys():
+                        pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                    if C is not None and (i, j_true) not in pairs2.keys():
                         pairs2[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
-                elif rank > k or rank2 > k:
-                    if rank <= k:
-                        results1[k] +=1
-                        if C is not None and (i, j_true) not in pairs1.keys():
-                            pairs1[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_a[i]]
-                        if C is not None and (i, j_true) not in pairs2.keys():
-                            pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
-                    elif rank2 <= k:
-                        results2[k] +=1
-                        if C is not None and (i, j_true) not in pairs1.keys():
-                            pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
-                        if C is not None and (i, j_true) not in pairs2.keys():
-                            pairs2[(i, j_true)]=[k, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
-                    else:
-                        if C is not None and (i, j_true) not in pairs1.keys():
-                            pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
-                        if C is not None and (i, j_true) not in pairs2.keys():
-                            pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
-        n = len(gt_set)
-        if verbose:
-            print(f"Paires évaluées : {n}")
-            for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:  # Idéalement, créer un dico méthode --> résultat
-                print(f"=========== {val} ===========")
-                for k in top_k:
-                    if val == "Lignes":
-                        print(f"Top-{k} accuracy : {results1[k]/n:.3f} ({results1[k]}/{n})")
-                    elif val == "Colonnes":
-                        print(f"Top-{k} accuracy : {results2[k]/n:.3f} ({results2[k]}/{n})")
-                    else:
-                        print(f"Top-{k} accuracy : {both[k]/n:.3f} ({both[k]}/{n})")
-            print(f" Rang moyen des maladies Orpha : {np.mean(ranks_orpha):.2f}")
-            print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
-    else:
-        ranks = []
-        pairs = {}
-        results = {k: 0 for k in top_k}
-        marginal = np.sum(P, axis=1)
-        for i in gt_set.keys():
-            ranked_cols = np.argsort(P[i])[::-1]
-            js = gt_set[i]
-            rank_j = []
-            for j in js:
-                rank = np.where(ranked_cols == j)[0]
-                if len(rank) == 0:
-                    continue
-                rank = rank[0] + 1
-                rank_j.append(rank)
-                for k in top_k:
-                    if rank <= k:
-                        results[k] += 1
-                        if C is not None and (i, j) not in pairs.keys():
-                            pairs[(i, j)]=[k, C[i, j], P[i, j]/marginal[i]]
-                if C is not None and (i, j) not in pairs.keys():
-                    pairs[(i, j)]=[0, C[i, j], P[i, j]/marginal[i]]
-            ranks.append(rank_j) # Rang de la vraie maladie j_true dans la matrice de transport
-              
-        n = len(gt_set)
-        if verbose:
-            print(f"Paires évaluées : {n}")
+                else:
+                    if C is not None and (i, j_true) not in pairs1.keys():
+                        pairs1[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_a[i]]
+                    if C is not None and (i, j_true) not in pairs2.keys():
+                        pairs2[(i, j_true)]=[0, C[i, j_true], P[i, j_true]/marginal_b[j_true]]
+    n = len(gt_set)
+    if verbose:
+        print(f"Paires évaluées : {n}")
+        for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:  # Idéalement, créer un dico méthode --> résultat
+            print(f"=========== {val} ===========")
             for k in top_k:
-                print(f"Top-{k} accuracy : {results[k]/n:.3f} ({results[k]}/{n})")
-            #print(f" Rang moyen: {np.mean(ranks):.2f}")
+                if val == "Lignes":
+                    print(f"Top-{k} accuracy : {results1[k]/n:.3f} ({results1[k]}/{n})")
+                elif val == "Colonnes":
+                    print(f"Top-{k} accuracy : {results2[k]/n:.3f} ({results2[k]}/{n})")
+                else:
+                    print(f"Top-{k} accuracy : {both[k]/n:.3f} ({both[k]}/{n})")
+        print(f" Rang moyen des maladies Orpha : {np.mean(ranks_orpha):.2f}")
+        print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
 
     return ranks_orpha, ranks_omim, pairs1, pairs2, both
 
@@ -710,7 +679,7 @@ def plot_unbalanced(taus, C, epsilon, gt_set):
     plt.show()
 
 
-def plot_PR_curve(P, gt_set, seuils):
+def plot_PR_curve(P, gt_set, seuils, ax=None, title=None):
     '''
     Courbe précision-rappel calculée sur le plan de transport, à partir de la probabilité
     d'association obtenue grâce à evaluate_transport_proba.
@@ -729,13 +698,20 @@ def plot_PR_curve(P, gt_set, seuils):
             recall.append(rec)
     # Plot
     sns.set_theme()
-    fig, ax = plt.subplots(figsize=(4,4))
-    sns.lineplot(x=recall, y=precision, markers='X', ax=ax)
+    standalone = ax is None
+    if standalone:
+        fig, ax = plt.subplots(figsize=(4,4))
+
+    sns.lineplot(x=recall, y=precision, marker='X', ax=ax)
     ax.set_ylim(0,1)
     ax.set_xlim(0,1)
-    ax.set_title('Courbe précision-rappel')
-    plt.tight_layout()
-    plt.plot()
+    ax.set_title(title or 'Courbe précision-rappel')
+
+    if standalone:
+        plt.tight_layout()
+        plt.show()
+
+    return ax
 
 #===========================================================================================
 #============================== Régularisation laplacienne =================================

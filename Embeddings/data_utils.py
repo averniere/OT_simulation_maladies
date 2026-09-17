@@ -142,6 +142,20 @@ def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
     return gt_set, valid_omim, valid_orpha
 
 
+def f_ground_truth_broad(df1, df2, correspondances):
+    '''
+    Retourne le dictionnaire {Maladie 1 : [Maladie(s) 2]}, dans le cas où les maladies
+    peuvent correspondre à plusieurs autres maladies.
+    '''
+    gt_set_broad, _, _= f_ground_truth(df1, df2, correspondances)
+    i_set = [a for a, b in gt_set_broad]
+    d_gt = defaultdict(list)  # Dictionnaire {Maladie OMIM : [Maladie(s) Orphanet]}
+    for i, j in gt_set_broad:
+        if np.isin(i, i_set):
+            d_gt[i].append(j)
+    return d_gt
+
+
 @torch.no_grad()
 def evaluate_embedding(model, objects, edges, node2id, device):
     """
