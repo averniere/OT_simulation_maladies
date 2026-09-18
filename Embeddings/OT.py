@@ -15,6 +15,7 @@ from sklearn.metrics import pairwise_distances
 from joblib import Parallel, delayed
 from collections import defaultdict
 from poincare import PoincareManifold
+from data_utils import f_ground_truth, f_ground_truth_broad
 
 
 #===========================================================================================
@@ -450,6 +451,7 @@ def compute_unbalanced(C: np.ndarray,
     assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
     assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
     regm = (rega*epsilon/(1-rega) if rega<1 else np.inf, regb*epsilon/(1-regb) if regb<1 else np.inf)
+    assert 
     optimal_plan_sinkhorn = ot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, epsilon, regm, numItermax=max_iters, stopThr=tau)
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
@@ -561,6 +563,81 @@ def evaluate_transport(P, gt_set, C, top_k=(1, 3, 5), verbose=True):
         print(f" Rang moyen des maladies Omim : {np.mean(ranks_omim):.2f}")
 
     return ranks_orpha, ranks_omim, pairs1, pairs2, both
+
+
+def evaluate_transport_broad(P, df1, df2, correspondances, verbose=True, tol=1.5):
+    '''
+    Entrées :
+        - P : plan de transport.
+        - df1, df2 : les deux bases d'annotations entre lesquelles on résout le problème.
+        - correspondances : base de correspondances entre les maladies.
+        - tol : tolérance sur le rang de la maladie dans la matrice de transport. Si une maladie
+        M correspond à 2 maladies dans la base opposée, alors on regarde les tol*2 = 3 maladies
+        recevant le plus de masse dans le plan de transport.
+    Sortie : 
+        - both : dictionnaire indiquant pour chaque paire si les maladies sont correctement
+        retrouvées (True) en lisant le plan de transport en lignes et en colonnes, pour un niveau
+        de tolérance 0 et tol.
+        - ranks_js, ranks_is : rangs des maladies Orphanet et OMIM respectivement dans le plan 
+        de transport.
+    '''
+    gt_set1, gt_set2 = f_ground_truth_broad(df1, df2, correspondances)
+    gt_set, _, _ = f_ground_truth(df1, df2, correspondances)
+    both = {t : {(i,j):[False, False] for (i,j) in gt_set} for t in (0, tol)}
+    score_i = 0
+    score_j = 0 
+    err_rankj, err_ranki = [], []
+    for i, js in gt_set1.items():
+        ranks_js = []
+        ranked_cols = np.argsort(P[i])[::-1]
+        m = len(js)
+        m_tol = tol*m
+        for j in js: 
+            rank_j = np.where(ranked_cols == j)[0]
+            if len(rank_j) == 0:
+                continue
+            rank_j = rank_j[0] + 1
+            if rank_j <= m: 
+                both[0][(i,j)][0] = True
+                both[tol][(i,j)][0] = True
+                score_i += 1
+            elif rank_j > m and rank_j<= m_tol:
+                both[tol][(i,j)][0] = True
+            ranks_js.append(rank_j)
+        err_rankj.append(np.sum(ranks_js)-(m*(m+1))/2)
+    for j, i_s in gt_set2.items():
+        ranks_is = []
+        ranked_lines = np.argsort(P[:,j])[::-1]
+        m = len(i_s)
+        m_tol = tol*m
+        for i in i_s:
+            rank_i = np.where(ranked_lines == i)[0]
+            if len(rank_i) == 0:
+                continue
+            rank_i = rank_i[0] + 1
+            if rank_i <= m:
+                both[0][(i,j)][1] = True
+                both[tol][(i,j)][1] = True
+                score_j += 1
+            elif rank_i>m and rank_i<=m_tol:
+                both[tol][(i,j)][1] = True
+            ranks_is.append(rank_i)
+        err_ranki.append(np.sum(ranks_is)-(m*(m+1))/2)
+
+    if verbose:
+        print(f"Paires évaluées : {len(gt_set)}")
+        for val in ["Lignes", "Colonnes", "Lignes et Colonnes"]:
+            print(f"=========== {val} ===========")
+            if val == "Lignes":
+                print(f"Paires correctes : {score_i/len(gt_set):.3f} ({score_i}/{len(gt_set)})")
+                print(f"Erreur moyenne sur le rang : {np.mean(err_rankj):.0f}/{len(df2)} (absolue : {np.sum(err_ranki)})")
+            elif val == "Colonnes":
+                print(f"Paires correctes : {score_j/len(gt_set):.3f} ({score_j}/{len(gt_set)})")
+                print(f"Erreur moyenne sur le rang : {np.mean(err_ranki):.0f}/{len(df1)} (absolue : {np.sum(err_rankj)})")
+            else:
+                print(f"Paires correctes : {np.sum([both[0][(i,j)] == [True, True] for (i,j) in gt_set])/len(gt_set):.3f} ({np.sum([both[0][(i,j)] == [True, True] for (i,j) in gt_set])}/{len(gt_set)})")
+                print(f"Paires correctes avec une tolérance de {tol} : {np.sum([both[tol][(i,j)] == [True, True] for (i,j) in gt_set])/len(gt_set):.3f} ({np.sum([both[tol][(i,j)] == [True, True] for (i,j) in gt_set])}/{len(gt_set)})")
+    return both, ranks_is, ranks_js
 
 
 def evaluate_transport_proba(P, gt_set, seuil):

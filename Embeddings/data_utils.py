@@ -144,16 +144,21 @@ def f_ground_truth(work_omim, work_orpha, df_orpha_omim):
 
 def f_ground_truth_broad(df1, df2, correspondances):
     '''
-    Retourne le dictionnaire {Maladie 1 : [Maladie(s) 2]}, dans le cas où les maladies
-    peuvent correspondre à plusieurs autres maladies.
+    Retourne les dictionnaires {Maladie 1 : [Maladie(s) 2]} et {Maladie 2 : [Maladie(s) 1]}, 
+    dans le cas où une maladie peut correspondre à plusieurs autres maladies.
     '''
     gt_set_broad, _, _= f_ground_truth(df1, df2, correspondances)
     i_set = [a for a, b in gt_set_broad]
-    d_gt = defaultdict(list)  # Dictionnaire {Maladie OMIM : [Maladie(s) Orphanet]}
+    j_set = [b for a, b in gt_set_broad]
+    d_gt_i = defaultdict(list)  # Dictionnaire {Maladie OMIM : [Maladie(s) Orphanet]}
+    d_gt_j = defaultdict(list)  # Dictionnaire {Maladie Orphanet : [Maladie(s) OMIM]}
     for i, j in gt_set_broad:
         if np.isin(i, i_set):
-            d_gt[i].append(j)
-    return d_gt
+            d_gt_i[i].append(j)
+        if np.isin(j, j_set):
+            d_gt_j[j].append(i)
+
+    return d_gt_i, d_gt_j
 
 
 @torch.no_grad()
