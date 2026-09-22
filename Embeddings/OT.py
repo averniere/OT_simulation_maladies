@@ -451,7 +451,6 @@ def compute_unbalanced(C: np.ndarray,
     assert np.isclose(a.sum(), 1.0), f"somme a = {a.sum()}"
     assert np.isclose(b.sum(), 1.0), f"somme b = {b.sum()}"
     regm = (rega*epsilon/(1-rega) if rega<1 else np.inf, regb*epsilon/(1-regb) if regb<1 else np.inf)
-    assert 
     optimal_plan_sinkhorn = ot.unbalanced.sinkhorn_knopp_unbalanced(a, b, C, epsilon, regm, numItermax=max_iters, stopThr=tau)
     optimal_cost_sinkhorn = np.sum(optimal_plan_sinkhorn*C)
 
@@ -703,7 +702,7 @@ def plot_regularization(C, grid, alpha=5, a=None, b=None):
     plt.show()
 
 
-def plot_unbalanced(taus, C, epsilon, gt_set):
+def plot_unbalanced(taus, C, epsilon, gt_set, ax=None, title=None, legend=True):
     '''
     Entrées :
         - taus : liste de valeurs de tau à tester (tau dans [0,1]).
@@ -730,7 +729,9 @@ def plot_unbalanced(taus, C, epsilon, gt_set):
             res[sname]['Top 3'].append(both[3]/len(gt_set))
 
     sns.set_theme()
-    fig, ax = plt.subplots(figsize=(5, 5))
+    standalone = ax is None
+    if standalone:
+        fig, ax = plt.subplots(figsize=(5,5))
     palette = sns.color_palette(n_colors=len(scenarios) * 2)
     color_idx = 0
     for sname in scenarios:
@@ -749,11 +750,15 @@ def plot_unbalanced(taus, C, epsilon, gt_set):
         color_idx += 1
     ax.set_xlabel(r'$\tau$')
     ax.set_ylim(0, 1)
-    ax.set_title(f"Max Top 1 = {round(np.max([np.max(res[sname]['Top 1']) for sname in res]), 2)}, Top 3 = {round(np.max([np.max(res[sname]['Top 3']) for sname in res]), 2)}")
-    ax.legend()
+    ax.set_title(f" {title or ""}- Max Top 1 = {round(np.max([np.max(res[sname]['Top 1']) for sname in res]), 2)}, Top 3 = {round(np.max([np.max(res[sname]['Top 3']) for sname in res]), 2)}")
+    if legend:
+        ax.legend()
 
-    plt.tight_layout()
-    plt.show()
+    if standalone:
+        plt.tight_layout()
+        plt.show()
+
+    return ax
 
 
 def plot_PR_curve(P, gt_set, seuils, ax=None, title=None):
@@ -832,6 +837,7 @@ def laplacian(x):
     L = np.diag(np.sum(x, axis=1)) - x
     return L
 
+
 def otda(
     a, b, 
     df_source, df_target, 
@@ -840,13 +846,11 @@ def otda(
     epsilon,
     eta=1., 
     alpha=0.5, 
-    reg="pos", 
-    numItermax=1000,
+    numItermax=25,
     stopThr=1e-9,
-    numInnerItermax=10_000,
-    stopInnerThr=1e-9,
-    log=False,
-    verbose=False
+    numInnerItermax=100_000,
+    stopInnerThr=5e-8,
+    verbose=True
     ):
     '''
     Reprend et adapte le code de la fonction emd_laplace de la dépendance ot.da du package POT.
@@ -901,39 +905,44 @@ def otda(
         f=f,
         df=df,
         G0=None,
-        numItermax=100, 
-        numInnerItermax=100_000, 
-        stopThr=1e-09, 
-        stopThr2=1e-09, 
+        numItermax=numItermax, 
+        numInnerItermax=numInnerItermax, 
+        stopThr=stopThr, 
+        stopThr2=stopInnerThr, 
         verbose=verbose
     )
 
 
-def plot_laplace(etas, C, regs, Ss, St, gt_set, alpha):
+def plot_laplace(df1, df2, etas, C, regs, Ss, St, gt_set, alpha, numItermax=25):
     '''
     Entrées :
+        - df1, df2 : les deux bases d'annotations entre lesquelles on calcule le transport.
         - etas : liste des eta à tester.
         - C : matrice de coût.
         - regs : liste des epsilon à tester.
         - Ss, St : matrices de similarité source et destination.
         - gt_set : vérité de terrain.
         - alpha : paramètre alpha dans la régularisation laplacienne.
+        - numItermax : nombre d'itérations maximales du gcg.
     Représente l'évolution des résultats en fonction de eta.
     '''
     res = {eps:{'Top 1':[], 'Top 3':[]} for eps in regs}
     for eps in tqdm(res.keys()):
         epsilon0 = eps * np.mean(C)
         for eta in etas:
-            ot_lapl = otda(None, None,  # a, b
-            omim_test, orpha_test, 
-            C, 
-            Ss, St,
-            epsilon0, 
-            eta, 
-            alpha)
+            ot_lapl = otda(
+                None, None,  # a, b
+                df1, df2, 
+                C, 
+                Ss, St,
+                epsilon0, 
+                eta, 
+                alpha,
+                numItermax=numItermax
+                )
 
             print("Transport computed !")
-            _, _, _, _, both = evaluate_transport(ot_lapl, gt_set_test, C, verbose=False)
+            _, _, _, _, both = evaluate_transport(ot_lapl, gt_set, C, verbose=False)
             res[eps]['Top 1'].append(both[1]/len(gt_set))
             res[eps]['Top 3'].append(both[3]/len(gt_set))
     sns.set_theme()
@@ -954,7 +963,7 @@ def plot_laplace(etas, C, regs, Ss, St, gt_set, alpha):
             )
             marker_idx += 1
         color_idx += 1
-    ax.set_xlabel(r'$\tau$')
+    ax.set_xlabel(r'$\eta$')
     ax.set_xscale('log')
     ax.set_ylim(0, 1)
     ax.set_title(f"Max Top 1 = {round(np.max([np.max(res[eps]['Top 1']) for eps in res]), 2)}, Top 3 = {round(np.max([np.max(res[eps]['Top 3']) for eps in res]), 2)}")

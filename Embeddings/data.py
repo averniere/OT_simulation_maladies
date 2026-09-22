@@ -75,13 +75,14 @@ hpo_cols0 = [c for c in profils_omim.columns if c.startswith('HP:')]
 genes_to_disease = pd.read_csv("../data/genes_to_disease.txt", sep="\t")
 genes_to_disease = genes_to_disease.drop(columns='source')
 
-print("Attention ! Pour charger tous les PPI, non préalablement filtrés, il est nécessaire de modifier le code !")
+
 ppi = pd.read_csv(
-    "https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", 
+    "https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.csv.gz", 
     sep=",",
     dtype={"protein1": "str", "protein2": "str", "combined_score": "int16"}
     )
 # Pour charger tous les PPI, non pré-filtrés, utiliser le lien : https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.csv.gz
+# Pour charger tous les PPI, non pré-filtrés, utiliser le lien : https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz
 
 
 doc = pd.read_csv(
@@ -136,10 +137,7 @@ df1_agg = df1.groupby('disease_id', as_index=False, dropna=True).agg(
 )
 
 df1_omim = pd.merge(work_omim, df1_agg, how='left', left_on='database_id', right_on='disease_id')
-#df1_omim = pd.merge(work_omim, df1, how='left', left_on='database_id', right_on='disease_id')
-
 df1_orpha = pd.merge(work_orpha, df1_agg, how='left', left_on='database_id', right_on='disease_id')
-#df1_orpha = pd.merge(work_orpha, df1, how='left', left_on='database_id', right_on='disease_id')
 
 del df_pivot
 gc.collect()
