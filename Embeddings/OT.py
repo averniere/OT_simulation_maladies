@@ -751,8 +751,8 @@ def plot_unbalanced(taus, C, epsilon, gt_set, ax=None, title=None, legend=True):
     ax.set_xlabel(r'$\tau$')
     ax.set_ylim(0, 1)
     ax.set_title(f" {title or ""}- Max Top 1 = {round(np.max([np.max(res[sname]['Top 1']) for sname in res]), 2)}, Top 3 = {round(np.max([np.max(res[sname]['Top 3']) for sname in res]), 2)}")
-    if legend:
-        ax.legend()
+    if not legend:
+        ax.legend().remove()
 
     if standalone:
         plt.tight_layout()
@@ -929,6 +929,12 @@ def plot_laplace(df1, df2, etas, C, regs, Ss, St, gt_set, alpha, numItermax=25):
     res = {eps:{'Top 1':[], 'Top 3':[]} for eps in regs}
     for eps in tqdm(res.keys()):
         epsilon0 = eps * np.mean(C)
+        ot_plan_reg, _ = compute_transport_sinkhorn(
+            C, None, None, epsilon0, 10000, 1e-4, False
+            )
+        _, _, _, _, both = evaluate_transport(ot_plan_reg, gt_set, C)
+        res[eps]['Top 1'].append(both[1]/len(gt_set))
+        res[eps]['Top 3'].append(both[3]/len(gt_set))
         for eta in etas:
             ot_lapl = otda(
                 None, None,  # a, b
@@ -953,14 +959,22 @@ def plot_laplace(df1, df2, etas, C, regs, Ss, St, gt_set, alpha, numItermax=25):
         markers = ['o', 'X']
         marker_idx = 0
         for metric in ['Top 1', 'Top 3']:
+            ax.axhline(
+                y=res[eps][metric][0], 
+                color=palette[color_idx], 
+                linestyle='--', 
+                linewidth=1, 
+                alpha=0.7, 
+                label=f'{eps} - {metric} (Init)'
+                )
             sns.lineplot(
                 x=etas, 
-                y=res[eps][metric], 
+                y=res[eps][metric][1:], 
                 marker=markers[marker_idx], 
                 label=f'{eps} - {metric}',
                 color=palette[color_idx],
                 ax=ax,
-            )
+                )
             marker_idx += 1
         color_idx += 1
     ax.set_xlabel(r'$\eta$')
