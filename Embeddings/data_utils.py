@@ -347,6 +347,20 @@ def load_all_methods(savedir=Path("../data/utils")):
     return dict_method
 
 
+def load_all_methods_from_s3(fs, s3_dir):
+    """
+    s3_dir : chemin S3 du dossier, ex: f"{MY_BUCKET}/OT_simulation_maladies/data/utils"
+    """
+    dict_method = {}
+    for path in fs.glob(f"{s3_dir}/*.npz"):
+        stem = Path(path).stem 
+        with fs.open(f"s3://{path}") as f:
+            loaded = np.load(f)
+            dict_method[stem] = {k: loaded[k] for k in loaded.files}
+            loaded.close()
+    return dict_method
+
+
 def build_pairs_dictionary(pairs, df_omim, df_orpha, df):
     '''
     Entrées :

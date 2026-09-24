@@ -77,7 +77,7 @@ genes_to_disease = genes_to_disease.drop(columns='source')
 
 
 ppi = pd.read_csv(
-    "https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.csv.gz", 
+    "https://stringdb-downloads.org/download/stream/protein.links.v12.0/9606.protein.links.v12.0.min700.csv.gz", 
     sep=",",
     dtype={"protein1": "str", "protein2": "str", "combined_score": "int16"}
     )
