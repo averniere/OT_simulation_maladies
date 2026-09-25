@@ -1,8 +1,5 @@
 import pandas as pd
-import numpy as np
 
-quantile_list = list(np.arange(0.75, 0.999, 0.003))
-simu = pd.read_csv('simuls/simu_brut.csv.gz', sep = ';')
 
 def add_recall_precision(df, quantiles):
     for quantile in quantiles:
@@ -33,25 +30,5 @@ def add_recall_precision(df, quantiles):
                 
                 df.at[idx, recall_col] = recall
                 df.at[idx, precision_col] = precision
-                #df.at[idx, true_pos_col] = true_positives
-                #df.at[idx, liste_simulee_col] = len(quantile_list)
-    
-    return df 
-
-add_recall_precision(simu, quantile_list)
-
-
-columns_to_drop = [f'Associations_quantile_{q}' for q in quantile_list]
-
-recall_prec = simu.drop(columns = ['Complex_Disease', 'Mendelian_Sources'] + columns_to_drop)
-
-#recall_prec.to_csv('Database/recallprectest.csv')
-
-
-# Colonnes sur lesquelles regrouper
-group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex', 'eta']
-
-# Calcul des moyennes
-result = recall_prec.groupby(group_cols, as_index=False).mean()
-
-result.to_csv('simuls/simul.csv')
+                    
+    return df

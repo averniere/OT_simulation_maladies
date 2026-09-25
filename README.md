@@ -27,6 +27,8 @@ Schéma des principaux dossiers :
 |--data
 |   |--utils
 |--Embeddings
+|   |--simuls
+|   |   |--analyse_resultats.ipynb
 |   |--__init__.py
 |   |--analyse.ipynb
 |   |--batched_dataset.py
