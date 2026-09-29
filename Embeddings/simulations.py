@@ -1,18 +1,12 @@
 #Import
-import torch
-import re
 import pandas as pd
 import numpy as np
 import OT as otu
-import networkx as nx
-#import data 
 
-from poincare import PoincareManifold
-from model import Distance_PE
-from information_content import deprecated, compute_information_content
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
+from sklearn.metrics import precision_recall_curve
 from data_utils import *
 
 
@@ -125,6 +119,24 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
     return df_complex, df_truth
 
 
+def truth_matrix(df_truth, df_mendelian):
+    '''
+    Retourne la matrice binaire n_mendeliennes x n_complexes avec des entrées égales à 1 si
+    la mendélienne contribue à la complexe.
+    '''
+    complexes = df_truth['Complex_Disease'].to_numpy()
+    mendelist = [np.array(s.split(","), dtype=int) for s in df_truth['Mendelian_Sources']]
+    col_idx = np.repeat(np.arange(len(mendelist)), [len(l) for l in mendelist])
+
+    all_ids = list(df_mendelian.index.astype(int))
+    flat = np.concatenate(mendelist)
+    row_idx = np.searchsorted(all_ids, flat)
+
+    M = np.zeros((len(all_ids), len(complexes)), dtype=np.int32)
+    M[row_idx, col_idx] = 1  
+    return M
+
+
 # Regularized Optimal transport
 def Ot_Laplacienne(a, b, xs, xt, M, S, epsilon, eta, numItermax=100, stopThr=1e-9, numInnerItermax=100000,stopInnerThr=1e-9, log=False, verbose=False):
     """
@@ -209,6 +221,7 @@ def add_noise_to_matrix(matrix, noise_level):
 
     return pd.DataFrame(noisy_array, index=matrix.index, columns=matrix.columns)
 
+
 # Filter by quantiles
 def filter_by_quantile(matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex):
     result_df = pd.DataFrame()
@@ -247,6 +260,63 @@ def filter_by_quantile(matrix_df, quantiles, n_match, OT_type, noise_level, over
     result_df["n_complex"] = n_complex
     
     return result_df
+
+
+def filter_by_transport_proba(
+    P, seuils, truth_matrix, n_match, OT_type, noise_level, overlap_rate, n_complex
+    ):
+    '''
+    Pour le calcul de la précision et du rappel en seuillant la matrice à partir de la probabilité
+    d'une paire de maladies d'être matchée.
+    '''
+    result_df = pd.DataFrame()
+
+    marginal_a = P.sum(axis=1)
+    marginal_b = P.sum(axis=0)
+    S_row = P.div(marginal_a, axis=0)
+    S_col = P.div(marginal_b, axis=1)
+    S = ( S_row + S_col ) / 2
+    print('Max-Min proba', S.max(axis=None), S.min(axis=None))
+    for seuil in seuils:
+        S_filtered = S.where(S > seuil)
+        assoc_dict = {}
+
+        for complex_disease in S_filtered.columns:   # on parcourt chaque complexe (Complexe_1, Complexe_2...)
+            colonne = S_filtered[complex_disease]
+            masque = colonne.notna()  # On garde uniquement les mendéliennes qui ont un score (pas NaN = elles ont passé le seuil)
+            mendéliennes_selectionnees = S_filtered.index[masque]
+
+            # On convertit en liste de strings et on joint avec des virgules
+            mendéliennes_str = mendéliennes_selectionnees.astype(str)
+            resultat = ",".join(mendéliennes_str)
+            
+            # On stocke dans le dictionnaire
+            assoc_dict[complex_disease] = resultat
+
+        # Transformer en DataFrame pour ce quantile
+        seuil_df = pd.DataFrame({"Complex_Disease": assoc_dict.keys(), f"Associations_quantile_{seuil}": assoc_dict.values()})
+        
+        if result_df.empty:
+            result_df = seuil_df
+        else:
+            result_df = pd.merge(result_df, seuil_df, on="Complex_Disease", how="outer")        
+    # Ajouter les colonnes 'n_match', 'OT_type', 'Noise_Level'
+    result_df["n_match"] = n_match
+    result_df["OT_type"] = OT_type
+    result_df["noise_level"] = noise_level
+    result_df["overlap_rate"] = overlap_rate
+    result_df["n_complex"] = n_complex
+    
+    y_true = truth_matrix.ravel()
+    prec, rec, thr = precision_recall_curve(y_true, S.values.ravel())
+    pr_df = pd.DataFrame({"Precision": prec, "Recall": rec, "Seuil": np.append(thr, np.nan)})
+    pr_df["n_match"] = n_match
+    pr_df["OT_type"] = OT_type
+    pr_df["noise_level"] = noise_level
+    pr_df["overlap_rate"] = overlap_rate
+    pr_df["n_complex"] = n_complex
+    return result_df, pr_df
+
 
 # Create S
 def similarity_matrix(df, mendelian_list):
@@ -365,9 +435,9 @@ def process_simulation(
     transp_method_list=None,
     ):
 
-    #global_result = pd.DataFrame()
     all_results = []
     all_truths = []
+    all_pr = []
 
     for overlap_rate in overlap_test:
         for n_complex in n_complex_list:
@@ -377,6 +447,7 @@ def process_simulation(
                 simulation = simulate_disease(source_data, n_complex, n_match, group_size, overlap_rate)
                 target_data = simulation[0]
                 df_truth = simulation[1]
+                truth_mat = truth_matrix(df_truth, source_data)
 
                 # Filtrer les mendéliennes utilisées dans la simulation
                 source_data_filtre = filtrer_maladies(df_truth, source_data, 'Mendelian_Sources')
@@ -396,7 +467,6 @@ def process_simulation(
                 df_truth['n_match'] = n_match
                 df_truth['overlap_rate'] = overlap_rate
                 df_truth['n_complex'] = n_complex
-                #global_truth = pd.concat([global_truth, df_truth], ignore_index=True)
                 all_truths.append(df_truth)
 
                 for noise_level in noise_levels:
@@ -443,11 +513,14 @@ def process_simulation(
                     
                     # Raw distance
                     OT_type = "Raw"
-                    jaccard_distances_results = filter_by_quantile(
-                        cost_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex
+                    #jaccard_distances_results = filter_by_quantile(
+                        #cost_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex
+                        #)
+                    jaccard_distances_results, pr_raw = filter_by_transport_proba(
+                        cost_matrix_df, quantiles, truth_mat, n_match, OT_type, noise_level, overlap_rate, n_complex
                         )
-                    #global_result = pd.concat([global_result, jaccard_distances_results], ignore_index=True)
                     all_results.append(jaccard_distances_results)
+                    all_pr.append(pr_raw)
 
                     # Distributions de poids uniformes
                     a = np.ones(len(source_data_filtre.index)) / len(source_data_filtre.index)
@@ -466,11 +539,21 @@ def process_simulation(
                         print("Finished !")
                         transport_matrix_df = pd.DataFrame(ot_plan, index=source_data_filtre.index, columns=target_data.index)
                         OT_type = f"OT-{cost_method}-{transp_method}"
-                        ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                        #ot_results = filter_by_quantile(transport_matrix_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                        ot_results, pr_ot = filter_by_transport_proba(
+                            transport_matrix_df, 
+                            quantiles,
+                            truth_mat,
+                            n_match, 
+                            OT_type, 
+                            noise_level, 
+                            overlap_rate, 
+                            n_complex)
                         ot_results["mean_rank_error"] = evaluate_rank(transport_matrix_df, df_truth)
                         ot_results["eta"] = 0.0
-                        #global_result = pd.concat([global_result, ot_results], ignore_index=True)
+                        pr_ot["eta"] = 0.0
                         all_results.append(ot_results)
+                        all_pr.append(pr_ot)
 
                     # OT Laplacien
                     Xs_real = source_data_filtre.to_numpy()
@@ -482,11 +565,24 @@ def process_simulation(
                             gamma_opt = Ot_Laplacienne(a, b, xs=Xs_real, xt=Xt_simu, M=cost_matrix, S=S_value, epsilon=epsilon0, eta=eta)
                             gamma_opt_df = pd.DataFrame(gamma_opt, index=source_data_filtre.index, columns=target_data.index)
                             OT_type = f"OT laplace, {S_name}, {eta}"
-                            laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                            # laplace_results = filter_by_quantile(gamma_opt_df, quantiles, n_match, OT_type, noise_level, overlap_rate, n_complex)
+                            laplace_results, pr_lapl = filter_by_transport_proba(
+                                gamma_opt_df,
+                                quantiles,
+                                truth_mat,
+                                n_match,
+                                OT_type,
+                                noise_level,
+                                overlap_rate,
+                                n_complex)
                             laplace_results["eta"] = eta
-                            laplace_results["mean_rank_error"] = evaluate_rank(gamma_opt_df, df_truth)
-                            #global_result = pd.concat([global_result, laplace_results], ignore_index=True)
+                            laplace_results["mean_rank_error"] = evaluate_rank(
+                                gamma_opt_df, df_truth
+                                )
+                            pr_lapl["eta"] = eta
+                            
                             all_results.append(laplace_results)
+                            all_pr.append(pr_lapl)
 
     global_result = pd.concat(all_results, ignore_index=True)
     global_truth = pd.concat(all_truths, ignore_index=True)
@@ -496,5 +592,6 @@ def process_simulation(
         on=['Complex_Disease', 'n_match', 'overlap_rate'],
         how='left'
     )
+    global_pr = pd.concat(all_pr, ignore_index=True)
 
-    return global_result, df_truth, target_data
+    return global_result, df_truth, target_data, global_pr

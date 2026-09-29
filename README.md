@@ -84,7 +84,7 @@ Dossier `Embeddings`:
 - `data.py` permet de charger les tables d'annotations de maladies, les interactions PPI, gène-maladie, gène-protéine. `statistiques_descriptives.ipynb` est un notebook présentant les premières statistiques descriptives relatives aux données chargées.
 - `data_utils.py`, `OT.py`, `information_content.py`, `tsw.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Les notebooks `test.ipynb` et `tsw_node2vec.ipynb` contiennent les résultats.
 - `evaluation.py` contient les fonctions utilisées pour prédire ou non une bonne association (encore en exploration).
-- `simulations_add_metrics.py`, `simulations_process.py`, `simulations.py` et le dossier `simuls` reprennent le cadre de simulation de maladies complexes à partir de maladies mendéliennes.
+- `simulations_add_metrics.py`, `simulations_process.py`, `simulations.py` et le dossier `simuls` reprennent le cadre de simulation de maladies complexes à partir de maladies mendéliennes. Le fichier `analyse_resultats.ipynb` permet de tracer les courbes de résultats.
 
 Dossier `HGCN` :
 - `decoder.py`, `encoder.py`, `hyp_layer.py`, `load_data.py`, `main.py`, `model.py`, `poincare.py`, `RiemAdam.py`, `RSGD.py`(inutilisé finalement) et `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.

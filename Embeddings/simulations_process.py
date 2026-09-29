@@ -27,21 +27,33 @@ model = model.Distance_PE(
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
-n_replicats = 3  # Nombre de simulations
+# Nombre de simulations
+n_replicats = 1  
 result_dir = "simuls"
 python_path = sys.executable
 
 # Paramètres
-quantile_list = [0., 0.5] + list(np.arange(0.75, 0.95, 0.03))
-n_complex_list = [30]  # Nombre de maladies complexes à simuler           
-n_match_list = [50]  # [50, 100, 150] Nombre de maladies mendéliennes par maladie complexe              
-noise_levels = [0., 0.2, 0.5]  # [0., 0.2]   
+# Seuils/Quantiles pour calculer précision et rappel
+#quantile_list = [0., 0.5] + list(np.arange(0.75, 0.95, 0.03))
+quantile_list = np.linspace(0, 1., 30)
+# Nombre de maladies complexes à simuler
+n_complex_list = [30]
+# Nombre de maladies complexes par groupe
+group_size = 6          
+# Nombre de maladies mendéliennes par maladie complexe
+n_match_list = [50]  # [50, 100, 150]
+# Bruitage des données
+noise_levels = [0., 0.2]  # [0., 0.2]
+# Pourcentage de recouvrement entre maladies complexes d'un même groupe
+overlap_test = [0.1]  # [0., 0.2, 0.5]
+# Paramètres de régularisation du transport
 epsilon = 0.05
-overlap_test = [0.2, 0.5]
-group_size = 6
-eta_list = [1e3] # , 1e4]
-cost_method = 'jaccard'  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
+eta_list = [1e3]  # , 1e4]
+# Méthode de calcul de la fonction de coût
+cost_method = 'wasserstein'  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
+# Pondération si 'hamming pondéré
 weights_cost = ic
+# Contrainte sur les poids du transport entre maladies
 transp_method_list = ['classic', 'unbalanced']
 
 # S'assurer que le dossier existe
@@ -61,32 +73,31 @@ for i in range(n_replicats):
     print(f"Lancement de la simulation {i+1}/{n_replicats}")
 
     # Lancer la simulation
-    #subprocess.run([python_path, "simulations.py"], check=True)
-    results, df_truth, df_target = simi.process_simulation(
+    results, df_truth, df_target, all_pr = simi.process_simulation(
         source_data=data.profils_omim[data.hpo_cols0],
-        n_complex_list=n_complex_list,  # Nombre de maladies complexes à simuler           
-        n_match_list=n_match_list,  # [10 , 50], Nombre de maladies mendéliennes par maladie complexe              
-        noise_levels=noise_levels,  # [0, 0.05, 0.1, 0.2]   
+        n_complex_list=n_complex_list,       
+        n_match_list=n_match_list,
+        noise_levels=noise_levels,
         quantiles=quantile_list,
         epsilon=epsilon,
-        overlap_test=overlap_test,    
-        group_size=group_size,                     
+        overlap_test=overlap_test,
+        group_size=group_size,
         eta_list=eta_list,
         model=model,
         node2id=data.node2id_w,
         deprecated=data.deprecated,
-        cost_method=cost_method,  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
-        weights_cost=ic,  # Pondération si 'hamming pondéré'
-        transp_method_list=transp_method_list  # 'classic' ou 'unbalanced'
+        cost_method=cost_method,
+        weights_cost=ic,
+        transp_method_list=transp_method_list
         )
 
     #results.to_csv('simuls/simu_brut.csv.gz', sep=';', index=False, compression="gzip")
     df_target.to_csv("simuls/target.csv", sep=';', index=False)
     df_truth.to_csv("simuls/truth.csv", sep=';', index=False)
+    all_pr.to_csv("simuls/pr.csv", sep=";", index=False)
     
     
     # Appliquer add_metrics
-    # subprocess.run([python_path, "simulations_add_metrics.py"], check=True)
     #simu = pd.read_csv('simuls/simu_brut.csv.gz', sep=';')
     add_recall_precision(results, quantile_list)
     columns_to_drop = [f'Associations_quantile_{q}' for q in quantile_list]
@@ -108,6 +119,10 @@ for i in range(n_replicats):
     # renommer et stocker les fichiers truth
     truth_file = os.path.join(result_dir, f"truth_{i+1}.csv")
     os.rename("simuls/truth.csv", truth_file)
+
+    # renommer et stocker les fichiers pr
+    pr_file = os.path.join(result_dir, f"pr_{i+1}.csv")
+    os.rename("simuls/pr.csv", pr_file)
     
     # Supprimer le fichier volumineux de base
     #os.remove("simuls/simu_brut.csv.gz")
@@ -120,5 +135,5 @@ group_cols = ['n_match', 'OT_type', 'noise_level', 'overlap_rate', 'n_complex']
 df_mean = pd.concat(df_list).groupby(group_cols, as_index=False).mean()
 
 
-# Étape 4 : Sauvegarde pour visualisation dans R
+# Étape 4 : Sauvegarde pour visualisation
 df_mean.to_csv("simuls/results_mean.csv")

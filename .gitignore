@@ -7,5 +7,5 @@ Embeddings/checkpoints
 *.json
 *.npy
 *.csv.gz
-*.txt
+*.npz
 cache/
