@@ -80,7 +80,7 @@ Schéma des principaux dossiers :
 
 ## Organisation des dossiers
 Dossier `Embeddings`:
-- `batched_dataset.py`, `lorentz.py`, `model.py`, `main.py`, `poincare.py`, `RSGD.py`, `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré.
+- `batched_dataset.py`, `lorentz.py`, `model.py`, `main.py`, `poincare.py`, `RSGD.py`, `train.py` sont utiles à l'apprentissage de la représentation de l'ontologie dans le disque de Poincaré. Le fichier `analyse.ipynb` contient l'évaluation de la représentation.
 - `data.py` permet de charger les tables d'annotations de maladies, les interactions PPI, gène-maladie, gène-protéine. `statistiques_descriptives.ipynb` est un notebook présentant les premières statistiques descriptives relatives aux données chargées.
 - `data_utils.py`, `OT.py`, `information_content.py`, `tsw.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Les notebooks `test.ipynb` et `tsw_node2vec.ipynb` contiennent les résultats.
 - `evaluation.py` contient les fonctions utilisées pour prédire ou non une bonne association (encore en exploration).
