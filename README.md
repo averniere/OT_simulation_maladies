@@ -91,3 +91,5 @@ Dossier `HGCN` :
 - `data.py` permet de charger les tables d'annotations de maladies, les interactions PPI, gène-maladie, gène-protéine.
 - `data_utils.py`, `OT.py` contiennent les fonctions utilisées pour calculer les différentes fonctions de coût et plans de transport. Le notebook `test.ipynb` contient les résultats.
 - `evaluation.py` contient les fonctions utilisées pour prédire ou non une bonne association (encore en exploration).
+
+Dossier `data/utils`: direction où l'on enregistre les matrices de coût et plans de transport dans le cas des appariements OMIM-Orphanet. Ces données, trop volumineuses, ne sont pas sur Github. En principe, elles se situent sur s3 et il est possible de les charger via la fonction *load_all_methods_from_s3* du fichier `data_utils.py`. Il se peut que le jeton d'accès ait expiré, dans ce cas, il faut refaire tourner tout le code.

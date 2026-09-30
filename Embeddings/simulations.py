@@ -6,7 +6,7 @@ import OT as otu
 from tqdm import tqdm
 from ot.optim import gcg
 from scipy.sparse import csgraph
-from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import precision_recall_curve, average_precision_score
 from data_utils import *
 
 
@@ -115,7 +115,7 @@ def simulate_disease(df_mendelien, nb_complex, nb_per_complex, group_size, overl
 
     df_complex = pd.DataFrame(complex_profiles, index=complex_names)
     df_truth = pd.DataFrame({"Complex_Disease": complex_names,"Mendelian_Sources": complex_groundtruth})
-
+    print(f"Maladies utilisées pour la simulation : {len(used_mendelian)}/{len(mendelian_list)}.")
     return df_complex, df_truth
 
 
@@ -271,12 +271,13 @@ def filter_by_transport_proba(
     '''
     result_df = pd.DataFrame()
 
-    marginal_a = P.sum(axis=1)
-    marginal_b = P.sum(axis=0)
+    #marginal_a = P.sum(axis=1)
+    #marginal_b = P.sum(axis=0)
+    marginal_a = P.max(axis=1)
+    marginal_b = P.max(axis=0)
     S_row = P.div(marginal_a, axis=0)
     S_col = P.div(marginal_b, axis=1)
-    S = ( S_row + S_col ) / 2
-    print('Max-Min proba', S.max(axis=None), S.min(axis=None))
+    S = (S_row + S_col) / 2
     for seuil in seuils:
         S_filtered = S.where(S > seuil)
         assoc_dict = {}
@@ -309,7 +310,12 @@ def filter_by_transport_proba(
     
     y_true = truth_matrix.ravel()
     prec, rec, thr = precision_recall_curve(y_true, S.values.ravel())
-    pr_df = pd.DataFrame({"Precision": prec, "Recall": rec, "Seuil": np.append(thr, np.nan)})
+    ap = average_precision_score(y_true, S.values.ravel())
+    pr_df = pd.DataFrame({
+        "Precision": prec, 
+        "Recall": rec, 
+        "Seuil": np.append(thr, np.nan), 
+        'AP': ap})
     pr_df["n_match"] = n_match
     pr_df["OT_type"] = OT_type
     pr_df["noise_level"] = noise_level

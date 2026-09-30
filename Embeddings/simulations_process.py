@@ -28,7 +28,7 @@ model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
 # Nombre de simulations
-n_replicats = 1  
+n_replicats = 1
 result_dir = "simuls"
 python_path = sys.executable
 
@@ -39,18 +39,18 @@ quantile_list = np.linspace(0, 1., 30)
 # Nombre de maladies complexes à simuler
 n_complex_list = [30]
 # Nombre de maladies complexes par groupe
-group_size = 6          
+group_size = 4      
 # Nombre de maladies mendéliennes par maladie complexe
-n_match_list = [50]  # [50, 100, 150]
+n_match_list = [50, 100]  # [50, 100, 150]
 # Bruitage des données
 noise_levels = [0., 0.2]  # [0., 0.2]
 # Pourcentage de recouvrement entre maladies complexes d'un même groupe
-overlap_test = [0.1]  # [0., 0.2, 0.5]
+overlap_test = [0., 0.1, 0.3]  # [0., 0.2, 0.5]
 # Paramètres de régularisation du transport
 epsilon = 0.05
 eta_list = [1e3]  # , 1e4]
 # Méthode de calcul de la fonction de coût
-cost_method = 'wasserstein'  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
+cost_method = 'pearson correlation'  # 'wasserstein', 'hamming pondéré', 'hamming pondéré normes', 'hamming', 'jaccard', 'pearson correlation'
 # Pondération si 'hamming pondéré
 weights_cost = ic
 # Contrainte sur les poids du transport entre maladies
